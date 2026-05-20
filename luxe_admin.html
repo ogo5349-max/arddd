@@ -159,8 +159,8 @@ const LuxeDB = (() => {
       if(r2){try{return JSON.parse(r2);}catch(e){}}
       return null;
     },
-    requireAuth(to='luxe_login.html'){if(!this.currentUser()){window.location.href=to;return false;}return true;},
-    requireAdmin(to='luxe_login.html'){const u=this.currentUser();if(!u||u.role!=='admin'){window.location.href=to;return false;}return true;},
+    requireAuth(to='index.html'){if(!this.currentUser()){window.location.href=to;return false;}return true;},
+    requireAdmin(to='index.html'){const u=this.currentUser();if(!u||u.role!=='admin'){window.location.href=to;return false;}return true;},
     async getAll(){return getAll('users');},
     async delete(id){return delR('users',id);},
   };
@@ -394,7 +394,7 @@ body { background-color:#fff8f7; color:#1f1a1b; }
     <p class="font-body-sm text-[13px] text-on-surface-variant mb-4" id="stockModalName"></p>
     <label class="font-label-caps text-[11px] text-outline block mb-1.5">ຈຳນວນໃໝ່</label>
     <input id="stockModalQty" type="number" min="0" class="w-full border border-outline-variant/50 rounded-xl px-4 py-3 font-body-sm text-on-surface bg-white focus:outline-none focus:border-primary mb-5"/>
-    <button onclick="confirmStockEdit()" class="w-full bg-primary text-on-primary font-label-caps text-[12px] py-3 rounded-xl hover:opacity-90">整合</button>
+    <button onclick="confirmStockEdit()" class="w-full bg-primary text-on-primary font-label-caps text-[12px] py-3 rounded-xl hover:opacity-90">ຍືນຍັນ</button>
   </div>
 </div>
 
@@ -852,7 +852,7 @@ body { background-color:#fff8f7; color:#1f1a1b; }
   }
 
   window.addEventListener('DOMContentLoaded', async () => {
-    const isAuthed = LuxeDB.session.requireAdmin('luxe_login.html');
+    const isAuthed = LuxeDB.session.requireAdmin('index.html');
     if(!isAuthed) return;
 
     const user = LuxeDB.session.currentUser();
