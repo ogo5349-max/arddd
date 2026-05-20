@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="lo">
+<head>
+<script>
+/**
+ * ============================================================
+ *  LUXE BEAUTY — Shared IndexedDB Database Layer  v3.0
+ *  Stores: products | orders | orderItems | customers
+ *          activityLog | sessions | users
+ *  New v3: session auth | monthly chart from DB | cancelOrder
+ *          updateStock | customer level auto-upgrade
+ * ============================================================
+ */
+const LuxeDB = (() => {
+  const DB_NAME='LuxeBeautyDB', DB_VERSION=3;
+  let _db=null;
+
+  function open(){
+    return new Promise((res,rej)=>{
+      if(_db){res(_db);return;}
+      const r=indexedDB.open(DB_NAME,DB_VERSION);
+      r.onupgradeneeded=e=>{
+        const db=e.target.result;
+        if(!db.objectStoreNames.contains('products')){const s=db.createObjectStore('products',{keyPath:'id'});s.createIndex('category','category',{unique:false});}
+        if(!db.objectStoreNames.contains('orders')){const s=db.createObjectStore('orders',{keyPath:'id',autoIncrement:true});s.createIndex('status','status',{unique:false});s.createIndex('customerId','customerId',{unique:false});s.createIndex('createdAt','createdAt',{unique:false});}
+        if(!db.objectStoreNames.contains('orderItems')){const s=db.createObjectStore('orderItems',{keyPath:'id',autoIncrement:true});s.createIndex('orderId','orderId',{unique:false});s.createIndex('productId','productId',{unique:false});}
+        if(!db.objectStoreNames.contains('customers')){const s=db.createObjectStore('customers',{keyPath:'id',autoIncrement:true});s.createIndex('email','email',{unique:true});s.createIndex('level','level',{unique:false});}
+        if(!db.objectStoreNames.contains('activityLog')){const s=db.createObjectStore('activityLog',{keyPath:'id',autoIncrement:true});s.createIndex('time','time',{unique:false});s.createIndex('type','type',{unique:false});}
+        if(!db.objectStoreNames.contains('sessions')){db.createObjectStore('sessions',{keyPath:'id'});}
+        if(!db.objectStoreNames.contains('users')){const s=db.createObjectStore('users',{keyPath:'id',autoIncrement:true});s.createIndex('email','email',{unique:true});s.createIndex('role','role',{unique:false});}
+      };
+      r.onsuccess=e=>{_db=e.target.result;res(_db);};
+      r.onerror=e=>rej(e.target.error);
+    });
+  }
+
+  const gs=(n,m='readonly')=>_db.transaction(n,m).objectStore(n);
+  const p2=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});
+  const getAll=(n)=>p2(gs(n).getAll());
+  const getById=(n,id)=>p2(gs(n).get(id));
+  const byIdx=(n,idx,v)=>p2(gs(n).index(idx).getAll(v));
+  const addR=(n,r)=>p2(gs(n,'readwrite').add(r));
+  const putR=(n,r)=>p2(gs(n,'readwrite').put(r));
+  const delR=(n,id)=>p2(gs(n,'readwrite').delete(id));
+
+  // Images
+  const I={
+    p1:'https://lh3.googleusercontent.com/aida-public/AB6AXuBK_xhfotC-hJHrvydSnpeXR52ybkl-yIwvWXCL-5bWpMftOKeJIxh-dq7HkYcAW1Ekg9Z0Qk4BgO6xD11a97_xrhGIG3_leiO52lnm0uCAaKHsgFnxzzG_fNpcimdJs2O6M38VktV07_VJW7y0Ettsc4Ow7fB11CJMRM1KsNz7EnCLq2F_NbVa3RluCPB5-jSwNP7EccawkYFc0lZ4t_togqhFEa9Q9IF10C6P02DKLqQSKLGiCfYGc3ggla7_SvYmy0-OuSCqUA',
+    p2:'https://lh3.googleusercontent.com/aida-public/AB6AXuCQ23uqezSJ4BJj_3P5MPpXNnmjS2q6MllJdlzQDQsuDbRejeIEd7iQlaj8DByTwI-wAOV3H9gYAJcMy4HyshSBhB9BmbH2VUfSv96epfZtngj75oV0ORz2lI7cU82xi1FA9eOc0z1u4eQGQnWg1f6ziTj3EPEMIgA6xDLescWpjxn3xXP_ahg51qxhDha7OLjLQ-ElGlLaDuWcyVsGZ-6o9HaqqBozMCiBSQFPaZAzsDs0RFDy2WZgPYQjJ2a39QrU0tQp5B7d4Q',
+    p3:'https://lh3.googleusercontent.com/aida-public/AB6AXuBjbJ2lBPTiOIinxDJIKPf2Ihk3kDkpcqChvkLrIfg_2SeEnTZc1L2awKJq2RNQned355UmLkAUYWcXI0xfwdKOQwELfV2poyLmzf239WkF9NuIPaVF8AewKt1LUunm8Pg5d4r-BfYfYxjYuCU78X1Qko0OKetwJERFwc3JabZvp2-eUIPswd8i57QxDEYvVxwiZNEzQhTklJSWor2bbd7AoqqWQ2qdxMy-JTpm0ihIvxz_VIJcFSUSYuYECsWaQhoXQB2WuFTPXQ',
+    p4:'https://lh3.googleusercontent.com/aida-public/AB6AXuCDwlWohr79S8_c80NzaqkGepsS5-mNShRlZQeTl1zirnZgvdEvrGb3ctMtkkwyfttF_uUk4a98m6Z8rEyDyfiKgPr-A8D5SX4gp-BMDk2j3VH3L3qq0CpOBY8ojpJGIIAmd4ceKSz6V6Pmdeslvf8WV7rlmcy8V0zQhf3gLzUhz7FqbkFBBXWhmL511BjGYnb0bxcWFuEtE4Lki7HxMT-bcffkBq9HDHQVy9jL_9mC_f37jhvg0AamQsbKUGDo18skofmanEFUqA',
+    p5:'https://lh3.googleusercontent.com/aida-public/AB6AXuB_ujU_c3cvn7B9_GxY4NTv-AZP3LWDieEUlYSBsYDuwZ5k9Kjb_q-GC2uMddRcw9uOhq0vCEzu-6rv_oKgt7Ah73MZWdbfMg1nQo_y8hWdQ_i0azirY9Fs9GXmzisRq__aT7wG5m26q4fPGBZvg4onYjBMdex1_ytQBGRD7uUkrwgypr33lq1ZmGQNR-Z6zxwrvFoBAQhojfZnYYRR_4fOgIVmth0HnUeZOTPiMs8qbP-g2KiXs147s_423SugadAVGyJ2OZV9Tg',
+    p6:'https://lh3.googleusercontent.com/aida-public/AB6AXuAsRIsHiMWGjJXeg2l54xBxcQOMfawpF3xgg2pOn-IcT3DNEiz3bBwkqwUBG3hK1GJurGpC13TCrXB95ZzlaIE2LgN-ujr6IrpX6-epuG9kLpFlRl_ODW5VDh7uIgw31mRM092411h5PHv9I5WF6RQh0sJ5SCIrLc-uhI7XC5S0D4_zcDh4d1eeLN9nFckmMJn_mu4mLHhGPYnpXwOJyYPj1mfSBY7_opDEBoXC5EAxklu8FZRrtQx607CWqI78bjXKB_J4SgbBnA',
+    p7:'https://lh3.googleusercontent.com/aida-public/AB6AXuDClCuqNAkIQ8y1isEI5W7H8QZdA1YacKg2e68AJfv-ZikTr0gMzRXccD1EejEK6zSaIO8MBCuv03G6bRiDz4-pfulvRJ4ZWEHyMSy4Zj02EWLZngcY6m6auB4TevqB2ufaggo4Z0rInWWbB4rFFFJDiQ2CmxjGe5cVTTlAwhfbKc5O_W8mlz0BEm3fqcJUqmxwS9FaFFARuCzqAbWmAo-8m8Vu2d1_eJmF6iG5LHfRbRt0RZ6R8VSNfNF-hy1SyxaK17YtC2OIVQ',
+    p8:'https://lh3.googleusercontent.com/aida-public/AB6AXuBKqOywIz70dd7YF2NpD3gXyADuz8JpWURey_UMdb9ocy9vMJQrEVVbOT9DEBwTIU18sxp3De-aHgCyEp--U7G62a_2KHiVKPCm65GO0h3ttCojSzYQqDqxRapNHjeZKCfgW8dCrZvkFe4AhPWZqAzIo2NAwZWvedSg90Xbuph-MVE9XF3eBxjjtCrSKkWrKpyv0QYDQcI862HavRnidDUVNpapsHehOhoA6AOniEYayLK8TkvCjhl2Fk56rpDK8ZX1Dd4Hu-2cNQ',
+  };
+
+  const SL={'pending':'ລໍຖ້າ','processing':'ກຳລັງດຳເນີນ','shipping':'ກຳລັງສົ່ງ','delivered':'ສົ່ງສຳເລັດ','cancelled':'ຍົກເລີກ'};
+  const SF=['pending','processing','shipping','delivered'];
+  const rid=()=>'LX-'+(800000+Math.floor(Math.random()*99999));
+  const dia=n=>{const d=new Date();d.setDate(d.getDate()-n);return d.toISOString();};
+
+  async function seed(){
+    // Users
+    if(!(await getAll('users')).length){
+      const users=[
+        {email:'admin@luxebeauty.la',password:'admin123',name:'Admin ລຸກຊ໌',role:'admin',phone:'020 9999 0001',avatar:'A'},
+        {email:'suda@gmail.com',password:'suda1234',name:'ນາງ ສຸດາ',role:'customer',phone:'020 5555 1234',avatar:'ສ'},
+        {email:'mala@gmail.com',password:'mala1234',name:'ນາງ ມາລາ',role:'customer',phone:'020 7777 5432',avatar:'ມ'},
+      ];
+      for(const u of users){try{await addR('users',u);}catch(e){}}
+    }
+    // Products
+    if(!(await getAll('products')).length){
+      const prods=[
+        {id:1,name:'ເຊລຸ່ມ ໂຣສ ໄຮເດຣຊັ່ນ',category:'skincare',price:85,stock:24,badge:'ຂາຍດີ',revenue:62050,stars:5,reviews:128,desc:'ລ້ຽງຜິວ ແລະ ໃຫ້ຄວາມຊຸ່ມຊື່ນ',img:I.p1},
+        {id:2,name:'Silk Radiance Oil',category:'skincare',price:120,stock:28,badge:'ໃໝ່',revenue:48500,stars:4,reviews:85,desc:'ນ້ຳຫອມ ຄວາມສ່ອງໄສ ສຳລັບຜິວ',img:I.p2},
+        {id:3,name:'Velvet Lip Tint',category:'makeup',price:35,stock:56,badge:'',revenue:34020,stars:5,reviews:203,desc:'ສີ ລິ້ນ ຄຸນນະພາບສູງ',img:I.p3},
+        {id:4,name:'Dew Mist Sheet Mask',category:'skincare',price:42,stock:12,badge:'ຂາຍດີ',revenue:21500,stars:4,reviews:67,desc:'ສ້ຳຊຸ່ມ ແລະ ສົດຊື່ນ ທັນທີ',img:I.p4},
+        {id:5,name:'Troye Cold Cleanser',category:'bath',price:58,stock:18,badge:'',revenue:18000,stars:4,reviews:44,desc:'ລ້ານ ລ້ຽງ ຜິວໜ້າ',img:I.p5},
+        {id:6,name:'Pro Pore Minimizer',category:'skincare',price:68,stock:9,badge:'',revenue:14200,stars:5,reviews:91,desc:'ຂັດ ຂຸມຂຸນ ໃຫ້ໜ້ານ້ອຍ',img:I.p6},
+        {id:7,name:'ເທຍນ ໂບທານິ ໂຣສ & ຊີດາ',category:'wellness',price:45,stock:88,badge:'',revenue:12000,stars:4,reviews:156,desc:'ນ້ຳຫອມ ທຳມະຊາດ ສຳລັບ ສຸຂະພາບ',img:I.p7},
+        {id:8,name:'Luxe Brush Set',category:'makeup',price:120,stock:15,badge:'ໃໝ່',revenue:8500,stars:5,reviews:38,desc:'ຊຸດ ແປງ ດູ ແລ ຜິວໜ້ານ',img:I.p8},
+      ];
+      for(const p of prods) await putR('products',p);
+    }
+    // Customers
+    if(!(await getAll('customers')).length){
+      const custs=[
+        {name:'ນາງ ສຸດາ ພົມມະວົງ',email:'suda@gmail.com',phone:'020 5555 1234',level:'ທອງ',avatar:'ສ',orders:12,totalSpent:1240,joinedAt:'2023-06-01'},
+        {name:'ທ້າວ ໂກ ວິໄລ',email:'ko@gmail.com',phone:'020 2222 9876',level:'ເງິນ',avatar:'ໂ',orders:5,totalSpent:480,joinedAt:'2024-01-15'},
+        {name:'ນາງ ມາລາ ໄຊ',email:'mala@gmail.com',phone:'020 7777 5432',level:'ເພັດ',avatar:'ມ',orders:28,totalSpent:3850,joinedAt:'2022-11-20'},
+        {name:'ທ້າວ ສີ ທອນ',email:'si@gmail.com',phone:'020 3333 1111',level:'ທຳມະດາ',avatar:'ສ',orders:2,totalSpent:95,joinedAt:'2024-09-01'},
+      ];
+      for(const c of custs){try{await addR('customers',c);}catch(e){}}
+    }
+    // Orders — 20 seed orders spread across 6 months
+    if(!(await getAll('orders')).length){
+      const custs=await getAll('customers');
+      const prods=await getAll('products');
+      const defs=[
+        [150,[1,2],0,'delivered'],[140,[3,4],2,'delivered'],[120,[7],1,'delivered'],
+        [110,[5,6],3,'delivered'],[90,[1,3,8],2,'delivered'],[85,[2],0,'delivered'],
+        [70,[4,7],1,'delivered'],[60,[3],2,'delivered'],[50,[1],0,'delivered'],
+        [45,[5,8],3,'delivered'],[40,[6],2,'delivered'],[30,[2,3],0,'delivered'],
+        [25,[7],1,'delivered'],[20,[1,4],2,'delivered'],[15,[8],0,'delivered'],
+        [10,[3,5],3,'delivered'],[7,[6],1,'shipping'],[4,[2],2,'shipping'],
+        [2,[1,7],0,'processing'],[0,[4],3,'pending'],
+      ];
+      for(const [days,pids,ci,status] of defs){
+        const c=custs[ci]||custs[0];
+        const items=pids.map(id=>prods.find(p=>p.id===id)).filter(Boolean);
+        const total=items.reduce((s,p)=>s+p.price,0);
+        const oid=await addR('orders',{orderId:rid(),customerId:c.id||1,customerName:c.name,status,statusLao:SL[status],total,totalFmt:'$'+total.toFixed(2),payMethod:'ບັດເຄດິດ',address:'ນະຄອນຫຼວງ ວຽງຈັນ',note:'',createdAt:dia(days),updatedAt:dia(Math.max(0,days-1)),rating:status==='delivered'?5:null});
+        for(const p of items) await addR('orderItems',{orderId:oid,productId:p.id,productName:p.name,productImg:p.img,price:p.price,qty:1,subtotal:p.price});
+      }
+      const logs=[
+        {type:'order',icon:'shopping_bag',action:'ຄຳສັ່ງໃໝ່ ເຂົ້າລະບົບ',user:'ລະບົບ',time:dia(0)},
+        {type:'stock',icon:'inventory_2',action:'ອັບເດດ Stock: ເຊລຸ່ມ → 24 ຊິ້ນ',user:'Admin',time:dia(1)},
+        {type:'user',icon:'person_add',action:'ລູກຄ້າໃໝ່ ທ້າວ ສີ ທອນ ລົງທະບຽນ',user:'ລະບົບ',time:dia(2)},
+        {type:'order',icon:'local_shipping',action:'ອັບເດດ → ກຳລັງສົ່ງ',user:'Admin',time:dia(3)},
+        {type:'product',icon:'add_shopping_cart',action:'ເພີ່ມສິນຄ້າ: Luxe Brush Set',user:'Admin',time:dia(7)},
+      ];
+      for(const l of logs){try{await addR('activityLog',l);}catch(e){}}
+    }
+  }
+
+  /* ── SESSION / AUTH ─── */
+  const SK='luxe_sess_v3';
+  const session={
+    async login(email,password){
+      const users=await getAll('users');
+      const u=users.find(x=>x.email.toLowerCase()===email.toLowerCase().trim()&&x.password===password);
+      if(!u) throw new Error('ອີເມລ ຫຼື ລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ');
+      u.lastLogin=new Date().toISOString();
+      await putR('users',u);
+      const s={id:'current',userId:u.id,name:u.name,email:u.email,role:u.role,avatar:u.avatar||u.name[0],loginAt:new Date().toISOString()};
+      await putR('sessions',s);
+      sessionStorage.setItem(SK,JSON.stringify(s));
+      await activityLog.add('user','login','ເຂົ້າສູ່ລະບົບ: '+u.name,u.name);
+      return s;
+    },
+    async register({name,email,password,phone,role='customer'}){
+      const users=await getAll('users');
+      if(users.find(u=>u.email.toLowerCase()===email.toLowerCase())) throw new Error('ອີເມລນີ້ຖືກໃຊ້ງານແລ້ວ');
+      const nu={name,email:email.toLowerCase(),password,phone,role,avatar:name[0],createdAt:new Date().toISOString()};
+      const id=await addR('users',nu); nu.id=id;
+      if(role==='customer'){try{await addR('customers',{name,email:email.toLowerCase(),phone,level:'ທຳມະດາ',avatar:name[0],orders:0,totalSpent:0,joinedAt:new Date().toISOString().slice(0,10)});}catch(e){}}
+      await activityLog.add('user','person_add','ສ້າງບັນຊີ: '+name,'ລະບົບ');
+      return nu;
+    },
+    async logout(){
+      try{await delR('sessions','current');}catch(e){}
+      sessionStorage.removeItem(SK);
+      localStorage.removeItem('luxe_user');
+    },
+    currentUser(){
+      const r=sessionStorage.getItem(SK);
+      if(r){try{return JSON.parse(r);}catch(e){}}
+      const r2=localStorage.getItem('luxe_user');
+      if(r2){try{return JSON.parse(r2);}catch(e){}}
+      return null;
+    },
+    requireAuth(to='luxe_login.html'){if(!this.currentUser()){window.location.href=to;return false;}return true;},
+    requireAdmin(to='luxe_login.html'){const u=this.currentUser();if(!u||u.role!=='admin'){window.location.href=to;return false;}return true;},
+    async getAll(){return getAll('users');},
+    async delete(id){return delR('users',id);},
+  };
+
+  /* ── PRODUCTS ─── */
+  const products={
+    getAll:()=>getAll('products'),
+    getById:id=>getById('products',id),
+    getByCategory:cat=>byIdx('products','category',cat),
+    save:p=>putR('products',p),
+    delete:id=>delR('products',id),
+    async deductStock(pid,qty){
+      const p=await getById('products',pid);
+      if(!p) throw new Error('ບໍ່ພົບສິນຄ້າ');
+      if(p.stock<qty) throw new Error(`"${p.name}" ສາງບໍ່ພໍ (ເຫຼືອ ${p.stock})`);
+      p.stock-=qty; await putR('products',p); return p;
+    },
+    async updateStock(pid,newStock){
+      const p=await getById('products',pid);
+      if(!p) throw new Error('ບໍ່ພົບສິນຄ້າ');
+      const old=p.stock; p.stock=parseInt(newStock)||0;
+      await putR('products',p);
+      await activityLog.add('stock','inventory_2',`Stock "${p.name}": ${old}→${p.stock}`,'Admin');
+      return p;
+    },
+  };
+
+  /* ── ORDERS ─── */
+  const orders={
+    getAll:async()=>{const os=await getAll('orders');return os.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));},
+    getById:id=>getById('orders',id),
+    getItems:oid=>byIdx('orderItems','orderId',oid),
+    getByStatus:async s=>{const all=await getAll('orders');return(s==='all'?all:all.filter(o=>o.status===s)).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));},
+    async place({customerName,address,payMethod,note,cartItems}){
+      if(!cartItems?.length) throw new Error('ກະຕ່າວ່າງ');
+      for(const i of cartItems) await products.deductStock(i.id,i.qty);
+      const total=cartItems.reduce((s,i)=>s+i.price*i.qty,0);
+      const oid=await addR('orders',{orderId:rid(),customerId:1,customerName:customerName||'ລູກຄ້າ',status:'pending',statusLao:'ລໍຖ້າ',total,totalFmt:'$'+total.toFixed(2),payMethod:payMethod||'ເງິນສົດ',address:address||'',note:note||'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),rating:null});
+      for(const i of cartItems){
+        await addR('orderItems',{orderId:oid,productId:i.id,productName:i.name,productImg:i.img,price:i.price,qty:i.qty,subtotal:i.price*i.qty});
+        const p=await getById('products',i.id);
+        if(p){p.revenue=(p.revenue||0)+i.price*i.qty;await putR('products',p);}
+      }
+      await activityLog.add('order','shopping_bag',`ຄຳສັ່ງໃໝ່ ${customerName||'ລູກຄ້າ'} — $${total.toFixed(2)}`,'ລະບົບ');
+      return oid;
+    },
+    async updateStatus(id,status){
+      const o=await getById('orders',id);
+      if(!o) throw new Error('ບໍ່ພົບຄຳສັ່ງ');
+      o.status=status; o.statusLao=SL[status]||status; o.updatedAt=new Date().toISOString();
+      await putR('orders',o);
+      await activityLog.add('order','local_shipping',`#${o.orderId} → ${SL[status]||status}`,'Admin');
+      return o;
+    },
+    async cancelOrder(id){
+      const o=await getById('orders',id);
+      if(!o) throw new Error('ບໍ່ພົບຄຳສັ່ງ');
+      if(o.status==='delivered') throw new Error('ຍົກເລີກຄຳສັ່ງທີ່ສົ່ງແລ້ວບໍ່ໄດ້');
+      const items=await byIdx('orderItems','orderId',id);
+      for(const i of items){const p=await getById('products',i.productId);if(p){p.stock+=i.qty;await putR('products',p);}}
+      o.status='cancelled'; o.statusLao='ຍົກເລີກ'; o.updatedAt=new Date().toISOString();
+      await putR('orders',o);
+      await activityLog.add('order','cancel',`ຍົກເລີກ #${o.orderId}`,'ລູກຄ້າ');
+      return o;
+    },
+    async getSummary(){
+      const all=await getAll('orders');
+      const items=await getAll('orderItems');
+      const active=all.filter(o=>o.status!=='cancelled');
+      const rev=active.reduce((s,o)=>s+(o.total||0),0);
+      return{total:all.length,revenue:rev,pending:all.filter(o=>o.status==='pending').length,processing:all.filter(o=>o.status==='processing').length,shipping:all.filter(o=>o.status==='shipping').length,delivered:all.filter(o=>o.status==='delivered').length,cancelled:all.filter(o=>o.status==='cancelled').length,itemsSold:items.reduce((s,i)=>s+(i.qty||1),0),avgOrder:active.length?(rev/active.length):0};
+    },
+    async getMonthlyRevenue(months=6){
+      const all=await getAll('orders');
+      const now=new Date();
+      const LM=['ມ.ກ.','ກ.ພ.','ມ.ນ.','ມ.ສ.','ພ.ຄ.','ມ.ຖ.','ກ.ກ.','ສ.ຫ.','ກ.ຍ.','ຕ.ລ.','ພ.ຈ.','ທ.ວ.'];
+      const result=[];
+      for(let m=months-1;m>=0;m--){
+        const d=new Date(now.getFullYear(),now.getMonth()-m,1);
+        const mo=all.filter(o=>{const od=new Date(o.createdAt);return od.getFullYear()===d.getFullYear()&&od.getMonth()===d.getMonth()&&o.status!=='cancelled';});
+        result.push({label:LM[d.getMonth()],revenue:mo.reduce((s,o)=>s+(o.total||0),0),orders:mo.length});
+      }
+      return result;
+    },
+    delete:id=>delR('orders',id),
+  };
+
+  /* ── CUSTOMERS ─── */
+  const customers={
+    getAll:()=>getAll('customers'),
+    getById:id=>getById('customers',id),
+    save:c=>putR('customers',c),
+    delete:id=>delR('customers',id),
+    async updateFromOrder(cid,spent){
+      try{
+        const all=await getAll('customers');
+        const c=all.find(x=>x.id===cid)||all[0];
+        if(!c) return;
+        c.orders=(c.orders||0)+1; c.totalSpent=(c.totalSpent||0)+spent;
+        if(c.totalSpent>=3000) c.level='ເພັດ';
+        else if(c.totalSpent>=1000) c.level='ທອງ';
+        else if(c.totalSpent>=400) c.level='ເງິນ';
+        else c.level='ທຳມະດາ';
+        await putR('customers',c);
+      }catch(e){}
+    },
+  };
+
+  /* ── ACTIVITY LOG ─── */
+  const activityLog={
+    getAll:async()=>{const l=await getAll('activityLog');return l.sort((a,b)=>new Date(b.time)-new Date(a.time)).slice(0,60);},
+    add:(type,icon,action,user)=>addR('activityLog',{type,icon,action,user,time:new Date().toISOString()}),
+  };
+
+  async function init(){await open();await seed();return true;}
+  const STATUS={FLOW:SF,LAO:SL};
+
+  return{init,session,products,orders,customers,activityLog,STATUS};
+})();
+
+</script>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>LUXE BEAUTY | ເຂົ້າສູ່ລະບົບ</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<!-- Phetsarath OT via Google Fonts (Noto Sans Lao as fallback, Phetsarath loaded from CDN) -->
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  /* ==========================================
+     PHETSARATH OT FONT — loaded from CDN
+     ========================================== */
+  @font-face {
+    font-family: 'Phetsarath OT';
+    src: url('https://cdn.jsdelivr.net/gh/nicowillis/fonts@master/PhetsarathOT.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  /* ==========================================
+     GLOBAL FONT OVERRIDE — Phetsarath OT first
+     ========================================== */
+  *, *::before, *::after {
+    font-family: 'Phetsarath OT', 'Noto Sans Lao', sans-serif !important;
+  }
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined' !important;
+    font-variation-settings: 'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;
+  }
+
+  :root {
+    --primary: #845051;
+    --primary-light: #ffdad9;
+    --primary-dim: #f8b6b5;
+    --surface: #fff8f7;
+    --on-surface: #1f1a1b;
+    --outline: #847373;
+    --outline-variant: #d6c2c1;
+    --surface-container: #f6ebeb;
+    --surface-container-low: #fcf1f1;
+    --tertiary: #7d562d;
+    --tertiary-container: #ffdcbd;
+    --error: #ba1a1a;
+    --secondary: #675c58;
+  }
+
+  body {
+    background: var(--surface);
+    color: var(--on-surface);
+    min-height: 100vh;
+    margin: 0;
+  }
+
+  /* ==========================================
+     LAYOUT
+     ========================================== */
+  .page-wrapper {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    min-height: 100vh;
+  }
+  @media (max-width: 768px) {
+    .page-wrapper { grid-template-columns: 1fr; }
+    .brand-panel { display: none; }
+  }
+
+  /* ==========================================
+     BRAND PANEL (LEFT)
+     ========================================== */
+  .brand-panel {
+    background: linear-gradient(145deg, #340f11 0%, #845051 40%, #d8a777 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  .brand-panel::before {
+    content: '';
+    position: absolute;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(248,182,181,0.15) 0%, transparent 70%);
+    top: -100px; right: -100px;
+  }
+  .brand-panel::after {
+    content: '';
+    position: absolute;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(255,220,189,0.12) 0%, transparent 70%);
+    bottom: 80px; left: -60px;
+  }
+  .brand-logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 1;
+  }
+  .brand-logo-icon {
+    width: 44px; height: 44px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+  .brand-logo-text {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.08em;
+  }
+  .brand-tagline {
+    font-size: 11px;
+    color: rgba(255,255,255,0.6);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+  .brand-hero {
+    z-index: 1;
+  }
+  .brand-hero h2 {
+    font-size: 42px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.25;
+    margin: 0 0 20px;
+  }
+  .brand-hero p {
+    font-size: 16px;
+    color: rgba(255,255,255,0.72);
+    line-height: 1.7;
+    margin: 0 0 36px;
+  }
+  .brand-features {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .brand-feature {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .brand-feature-icon {
+    width: 38px; height: 38px;
+    background: rgba(255,255,255,0.12);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .brand-feature-icon .material-symbols-outlined {
+    font-size: 18px !important;
+    color: #ffdad9 !important;
+  }
+  .brand-feature span:last-child {
+    font-size: 14px;
+    color: rgba(255,255,255,0.8);
+  }
+  .brand-footer {
+    z-index: 1;
+    font-size: 12px;
+    color: rgba(255,255,255,0.4);
+  }
+  /* Floating shapes */
+  .shape-circle {
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .shape-1 { width: 200px; height: 200px; top: 30%; right: -80px; }
+  .shape-2 { width: 120px; height: 120px; bottom: 20%; right: 10%; }
+  .shape-3 { width: 60px; height: 60px; top: 15%; left: 30%; }
+
+  /* ==========================================
+     FORM PANEL (RIGHT)
+     ========================================== */
+  .form-panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 48px 40px;
+    background: #fff8f7;
+  }
+  .form-container {
+    width: 100%;
+    max-width: 400px;
+  }
+  .form-header {
+    margin-bottom: 36px;
+  }
+  .form-header h1 {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--on-surface);
+    margin: 0 0 8px;
+  }
+  .form-header p {
+    font-size: 15px;
+    color: var(--outline);
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  /* Tab switcher */
+  .tab-bar {
+    display: flex;
+    background: var(--surface-container);
+    border-radius: 14px;
+    padding: 4px;
+    margin-bottom: 32px;
+    gap: 4px;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    background: transparent;
+    color: var(--outline);
+  }
+  .tab-btn.active {
+    background: #fff;
+    color: var(--primary);
+    box-shadow: 0 2px 8px rgba(132,80,81,0.12);
+  }
+
+  /* Form fields */
+  .field-group { margin-bottom: 20px; }
+  .field-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--secondary);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .field-wrapper {
+    position: relative;
+  }
+  .field-icon {
+    position: absolute;
+    left: 14px; top: 50%; transform: translateY(-50%);
+    color: var(--outline);
+    pointer-events: none;
+  }
+  .field-icon .material-symbols-outlined {
+    font-size: 20px !important;
+  }
+  .field-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 13px 14px 13px 44px;
+    border: 1.5px solid var(--outline-variant);
+    border-radius: 12px;
+    font-size: 15px;
+    color: var(--on-surface);
+    background: #fff;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+  }
+  .field-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(132,80,81,0.1);
+  }
+  .field-input.error {
+    border-color: var(--error);
+    box-shadow: 0 0 0 3px rgba(186,26,26,0.08);
+  }
+  .field-toggle {
+    position: absolute;
+    right: 14px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; cursor: pointer;
+    color: var(--outline); padding: 2px;
+  }
+  .field-toggle .material-symbols-outlined {
+    font-size: 20px !important;
+  }
+  .field-error {
+    font-size: 12px;
+    color: var(--error);
+    margin-top: 6px;
+    display: none;
+  }
+  .field-error.show { display: block; }
+
+  /* Role selector */
+  .role-selector {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .role-card {
+    border: 1.5px solid var(--outline-variant);
+    border-radius: 12px;
+    padding: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+  .role-card:hover { border-color: var(--primary-dim); background: var(--surface-container-low, #fcf1f1); }
+  .role-card.selected {
+    border-color: var(--primary);
+    background: var(--primary-light);
+    box-shadow: 0 0 0 3px rgba(132,80,81,0.08);
+  }
+  .role-card .material-symbols-outlined {
+    font-size: 24px !important;
+    color: var(--primary) !important;
+  }
+  .role-card span:last-child {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--on-surface);
+  }
+  .role-card input[type="radio"] { display: none; }
+
+  /* Checkbox */
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .checkbox-row input[type="checkbox"] {
+    width: 18px; height: 18px;
+    accent-color: var(--primary);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .checkbox-row label {
+    font-size: 13px;
+    color: var(--secondary);
+    cursor: pointer;
+  }
+  .checkbox-row a { color: var(--primary); font-weight: 600; text-decoration: none; }
+  .checkbox-row a:hover { text-decoration: underline; }
+
+  /* Submit button */
+  .btn-primary {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(135deg, #845051 0%, #a06060 100%);
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.25s;
+    letter-spacing: 0.02em;
+    box-shadow: 0 4px 16px rgba(132,80,81,0.3);
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(132,80,81,0.38); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
+  .btn-primary .btn-spinner {
+    display: none;
+    width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin: 0 auto;
+  }
+  .btn-primary.loading .btn-text { display: none; }
+  .btn-primary.loading .btn-spinner { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Divider */
+  .divider {
+    display: flex; align-items: center; gap: 16px;
+    margin: 24px 0;
+    color: var(--outline);
+    font-size: 13px;
+  }
+  .divider::before, .divider::after {
+    content: ''; flex: 1;
+    height: 1px; background: var(--outline-variant);
+  }
+
+  /* Social login */
+  .btn-social {
+    width: 100%;
+    padding: 12px;
+    border: 1.5px solid var(--outline-variant);
+    border-radius: 12px;
+    background: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--on-surface);
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin-bottom: 10px;
+  }
+  .btn-social:hover { border-color: var(--primary-dim); background: var(--surface-container); }
+  .btn-social img { width: 20px; height: 20px; }
+
+  /* Footer links */
+  .form-footer {
+    text-align: center;
+    margin-top: 24px;
+    font-size: 14px;
+    color: var(--outline);
+  }
+  .form-footer a { color: var(--primary); font-weight: 600; text-decoration: none; }
+  .form-footer a:hover { text-decoration: underline; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    padding: 14px 22px;
+    border-radius: 12px;
+    font-size: 14px; font-weight: 600;
+    z-index: 9999;
+    transform: translateX(200px); opacity: 0;
+    transition: all 0.4s ease;
+    pointer-events: none;
+    max-width: 320px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  }
+  .toast.show { transform: translateX(0); opacity: 1; }
+  .toast.success { background: #845051; color: #fff; }
+  .toast.error-toast { background: #ba1a1a; color: #fff; }
+  .toast.info { background: #514343; color: #fff; }
+
+  /* Password strength */
+  .strength-bar-wrap {
+    display: flex; gap: 4px; margin-top: 8px;
+  }
+  .strength-seg {
+    flex: 1; height: 3px; border-radius: 2px;
+    background: var(--outline-variant);
+    transition: background 0.3s;
+  }
+  .strength-label {
+    font-size: 11px; color: var(--outline); margin-top: 4px;
+  }
+
+  /* Forgot password link */
+  .forgot-link {
+    text-align: right; margin-top: -12px; margin-bottom: 20px;
+    font-size: 13px;
+  }
+  .forgot-link a { color: var(--primary); font-weight: 600; text-decoration: none; }
+  .forgot-link a:hover { text-decoration: underline; }
+
+  /* Users list panel (demo) */
+  .users-panel {
+    margin-top: 28px;
+    background: var(--surface-container);
+    border-radius: 14px;
+    padding: 16px;
+    border: 1px solid var(--outline-variant);
+  }
+  .users-panel h4 {
+    font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--outline);
+    font-weight: 700; margin: 0 0 12px;
+  }
+  .user-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--outline-variant);
+  }
+  .user-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .user-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--primary-light);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: var(--primary);
+    flex-shrink: 0;
+  }
+  .user-info { flex: 1; min-width: 0; }
+  .user-name { font-size: 13px; font-weight: 600; color: var(--on-surface); }
+  .user-email { font-size: 11px; color: var(--outline); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-role-badge {
+    font-size: 10px; padding: 3px 8px; border-radius: 20px;
+    font-weight: 700;
+  }
+  .badge-admin { background: #ffdad9; color: #845051; }
+  .badge-customer { background: #ffdcbd; color: #7d562d; }
+  .user-del {
+    background: none; border: none; cursor: pointer;
+    color: var(--outline); padding: 4px; border-radius: 6px;
+    transition: all 0.2s;
+  }
+  .user-del:hover { background: #ffdad9; color: var(--error); }
+  .user-del .material-symbols-outlined { font-size: 16px !important; }
+
+  /* DB status indicator */
+  .db-status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--outline);
+    margin-bottom: 16px;
+  }
+  .db-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #d6c2c1;
+    transition: background 0.3s;
+  }
+  .db-dot.connected { background: #4caf50; box-shadow: 0 0 0 2px rgba(76,175,80,0.2); }
+
+  /* Animation */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .form-container { animation: fadeInUp 0.6s ease both; }
+
+  /* Mobile logo */
+  .mobile-logo {
+    display: none;
+    align-items: center; gap: 10px; margin-bottom: 28px;
+  }
+  @media (max-width: 768px) {
+    .mobile-logo { display: flex; }
+    .form-panel { padding: 32px 24px; }
+  }
+  .mobile-logo-icon {
+    width: 38px; height: 38px;
+    background: var(--primary);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mobile-logo-icon .material-symbols-outlined { font-size: 20px !important; color: #fff !important; }
+  .mobile-logo-text { font-size: 18px; font-weight: 700; color: var(--on-surface); letter-spacing: 0.05em; }
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast"></div>
+
+<div class="page-wrapper">
+
+  <!-- ============================
+       BRAND PANEL
+       ============================ -->
+  <div class="brand-panel">
+    <div class="shape-circle shape-1"></div>
+    <div class="shape-circle shape-2"></div>
+    <div class="shape-circle shape-3"></div>
+
+    <div class="brand-logo">
+      <div class="brand-logo-icon">
+        <span class="material-symbols-outlined" style="color:#ffdad9;font-size:22px!important;">spa</span>
+      </div>
+      <div>
+        <div class="brand-logo-text">LUXE BEAUTY</div>
+        <div class="brand-tagline">ລະດັບສູງ · ຄຸນນະພາບ · ຄວາມງາມ</div>
+      </div>
+    </div>
+
+    <div class="brand-hero">
+      <h2>ຍິນດີຕ້ອນຮັບສູ່<br/>ໂລກແຫ່ງຄວາມງາມ</h2>
+      <p>ສຳຜັດປະສົບການການດູແລຜິວໜັງລະດັບສູງ ດ້ວຍຜະລິດຕະພັນທີ່ຄັດສັນມາຢ່າງດີ ເພື່ອທ່ານໂດຍສະເພາະ</p>
+      <div class="brand-features">
+        <div class="brand-feature">
+          <div class="brand-feature-icon">
+            <span class="material-symbols-outlined">verified</span>
+          </div>
+          <span>ສິນຄ້າຄຸນນະພາບ ຮັບປະກັນ 100%</span>
+        </div>
+        <div class="brand-feature">
+          <div class="brand-feature-icon">
+            <span class="material-symbols-outlined">local_shipping</span>
+          </div>
+          <span>ຈັດສົ່ງໄວ ທົ່ວປະເທດລາວ</span>
+        </div>
+        <div class="brand-feature">
+          <div class="brand-feature-icon">
+            <span class="material-symbols-outlined">lock</span>
+          </div>
+          <span>ຂໍ້ມູນຂອງທ່ານປອດໄພ ສ້ວງສ່ວນ</span>
+        </div>
+        <div class="brand-feature">
+          <div class="brand-feature-icon">
+            <span class="material-symbols-outlined">support_agent</span>
+          </div>
+          <span>ບໍລິການລູກຄ້າ 24/7</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="brand-footer">© 2025 LUXE BEAUTY. All rights reserved.</div>
+  </div>
+
+  <!-- ============================
+       FORM PANEL
+       ============================ -->
+  <div class="form-panel">
+    <div class="form-container">
+
+      <!-- Mobile logo -->
+      <div class="mobile-logo">
+        <div class="mobile-logo-icon">
+          <span class="material-symbols-outlined">spa</span>
+        </div>
+        <div class="mobile-logo-text">LUXE BEAUTY</div>
+      </div>
+
+      <!-- DB Status -->
+      <div class="db-status">
+        <div class="db-dot" id="dbDot"></div>
+        <span id="dbStatusText">ກຳລັງເຊື່ອມຕໍ່ Database...</span>
+      </div>
+
+      <!-- Tab bar -->
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tabLogin" onclick="switchTab('login')">ເຂົ້າສູ່ລະບົບ</button>
+        <button class="tab-btn" id="tabRegister" onclick="switchTab('register')">ສ້າງບັນຊີ</button>
+      </div>
+
+      <!-- ========================
+           LOGIN FORM
+           ======================== -->
+      <div id="loginForm">
+        <div class="form-header">
+          <h1>ເຂົ້າສູ່ລະບົບ</h1>
+          <p>ໃສ່ອີເມລ ແລະ ລະຫັດຜ່ານຂອງທ່ານ</p>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="loginEmail">ອີເມລ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">mail</span></span>
+            <input class="field-input" id="loginEmail" type="email" placeholder="your@email.com" autocomplete="email"/>
+          </div>
+          <div class="field-error" id="loginEmailErr">ກະລຸນາໃສ່ອີເມລທີ່ຖືກຕ້ອງ</div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="loginPassword">ລະຫັດຜ່ານ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">lock</span></span>
+            <input class="field-input" id="loginPassword" type="password" placeholder="ລະຫັດຜ່ານ" autocomplete="current-password"/>
+            <button class="field-toggle" onclick="togglePw('loginPassword', this)" type="button">
+              <span class="material-symbols-outlined">visibility</span>
+            </button>
+          </div>
+          <div class="field-error" id="loginPasswordErr">ລະຫັດຜ່ານຕ້ອງມີຢ່າງໜ້ອຍ 6 ຕົວ</div>
+        </div>
+
+        <div class="forgot-link">
+          <a href="#" onclick="forgotPassword()">ລືມລະຫັດຜ່ານ?</a>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="rememberMe"/>
+          <label for="rememberMe">ຈື່ຂ້ອຍໄວ້ (Remember me)</label>
+        </div>
+
+        <button class="btn-primary" id="loginBtn" onclick="handleLogin()">
+          <span class="btn-text">ເຂົ້າສູ່ລະບົບ</span>
+          <div class="btn-spinner"></div>
+        </button>
+
+        <div class="divider">ຫຼື</div>
+
+        <button class="btn-social" onclick="demoLogin('admin')">
+          <span class="material-symbols-outlined" style="color:#845051;font-size:18px!important;">admin_panel_settings</span>
+          ເຂົ້າໃນຖານະ Admin (Demo)
+        </button>
+        <button class="btn-social" onclick="demoLogin('customer')">
+          <span class="material-symbols-outlined" style="color:#7d562d;font-size:18px!important;">person</span>
+          ເຂົ້າໃນຖານະ ລູກຄ້າ (Demo)
+        </button>
+
+        <div class="form-footer">
+          ຍັງບໍ່ມີບັນຊີ? <a href="#" onclick="switchTab('register')">ສ້າງບັນຊີໃໝ່</a>
+        </div>
+      </div>
+
+      <!-- ========================
+           REGISTER FORM
+           ======================== -->
+      <div id="registerForm" style="display:none">
+        <div class="form-header">
+          <h1>ສ້າງບັນຊີໃໝ່</h1>
+          <p>ເລີ່ມຕົ້ນປະສົບການ LUXE BEAUTY ຂອງທ່ານ</p>
+        </div>
+
+        <!-- Role selector -->
+        <div class="field-label" style="margin-bottom:10px;">ປະເພດບັນຊີ</div>
+        <div class="role-selector">
+          <label class="role-card selected" id="roleCustomer">
+            <input type="radio" name="role" value="customer" checked onchange="selectRole('customer')"/>
+            <span class="material-symbols-outlined">shopping_bag</span>
+            <span>ລູກຄ້າ</span>
+          </label>
+          <label class="role-card" id="roleAdmin">
+            <input type="radio" name="role" value="admin" onchange="selectRole('admin')"/>
+            <span class="material-symbols-outlined">admin_panel_settings</span>
+            <span>ຜູ້ຈັດການ</span>
+          </label>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="regName">ຊື່ ແລະ ນາມສະກຸນ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">person</span></span>
+            <input class="field-input" id="regName" type="text" placeholder="ຊື່ຂອງທ່ານ..." autocomplete="name"/>
+          </div>
+          <div class="field-error" id="regNameErr">ກະລຸນາໃສ່ຊື່ຂອງທ່ານ</div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="regEmail">ອີເມລ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">mail</span></span>
+            <input class="field-input" id="regEmail" type="email" placeholder="your@email.com" autocomplete="email"/>
+          </div>
+          <div class="field-error" id="regEmailErr">ກະລຸນາໃສ່ອີເມລທີ່ຖືກຕ້ອງ</div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="regPhone">ເບີໂທລະສັບ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">phone</span></span>
+            <input class="field-input" id="regPhone" type="tel" placeholder="020 XXXX XXXX" autocomplete="tel"/>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="regPassword">ລະຫັດຜ່ານ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">lock</span></span>
+            <input class="field-input" id="regPassword" type="password" placeholder="ຢ່າງໜ້ອຍ 6 ຕົວ" oninput="checkStrength(this.value)" autocomplete="new-password"/>
+            <button class="field-toggle" onclick="togglePw('regPassword', this)" type="button">
+              <span class="material-symbols-outlined">visibility</span>
+            </button>
+          </div>
+          <div class="strength-bar-wrap">
+            <div class="strength-seg" id="s1"></div>
+            <div class="strength-seg" id="s2"></div>
+            <div class="strength-seg" id="s3"></div>
+            <div class="strength-seg" id="s4"></div>
+          </div>
+          <div class="strength-label" id="strengthLabel"></div>
+          <div class="field-error" id="regPasswordErr">ລະຫັດຜ່ານຕ້ອງມີຢ່າງໜ້ອຍ 6 ຕົວ</div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="regConfirm">ຢືນຢັນລະຫັດຜ່ານ</label>
+          <div class="field-wrapper">
+            <span class="field-icon"><span class="material-symbols-outlined">lock_reset</span></span>
+            <input class="field-input" id="regConfirm" type="password" placeholder="ໃສ່ລະຫັດຜ່ານອີກຄັ້ງ" autocomplete="new-password"/>
+          </div>
+          <div class="field-error" id="regConfirmErr">ລະຫັດຜ່ານບໍ່ກົງກັນ</div>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="agreeTerms"/>
+          <label for="agreeTerms">ຂ້ອຍຍອມຮັບ <a href="#">ເງື່ອນໄຂການໃຊ້ງານ</a> ແລະ <a href="#">ນະໂຍບາຍຄວາມເປັນສ່ວນຕົວ</a></label>
+        </div>
+
+        <button class="btn-primary" id="registerBtn" onclick="handleRegister()">
+          <span class="btn-text">ສ້າງບັນຊີ</span>
+          <div class="btn-spinner"></div>
+        </button>
+
+        <div class="form-footer" style="margin-top:20px;">
+          ມີບັນຊີແລ້ວ? <a href="#" onclick="switchTab('login')">ເຂົ້າສູ່ລະບົບ</a>
+        </div>
+      </div>
+
+      <!-- ========================
+           REGISTERED USERS LIST
+           ======================== -->
+      <div class="users-panel" id="usersPanel">
+        <h4>
+          <span class="material-symbols-outlined" style="font-size:14px!important;vertical-align:middle;margin-right:4px;">database</span>
+          ຜູ້ໃຊ້ໃນ Database (IndexedDB)
+        </h4>
+        <div id="usersList">
+          <div style="font-size:12px;color:var(--outline);text-align:center;padding:8px 0;">ກຳລັງໂຫລດ...</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============================
+     SUCCESS OVERLAY
+     ============================ -->
+<div id="successOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:500;display:none;align-items:center;justify-content:center;">
+  <div style="background:#fff8f7;border-radius:24px;padding:40px;max-width:380px;width:88%;text-align:center;animation:fadeInUp 0.4s ease;">
+    <div style="width:72px;height:72px;background:#ffdad9;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;">
+      <span class="material-symbols-outlined" style="font-size:36px!important;color:#845051!important;">check_circle</span>
+    </div>
+    <h3 style="font-size:22px;font-weight:700;color:#1f1a1b;margin:0 0 10px;" id="successTitle">ເຂົ້າສູ່ລະບົບສຳເລັດ!</h3>
+    <p style="font-size:14px;color:#514343;margin:0 0 28px;" id="successMsg">ຍິນດີຕ້ອນຮັບກັບຄືນ</p>
+    <div style="display:flex;gap:10px;">
+      <button onclick="goToPage('home')" style="flex:1;padding:12px;background:#845051;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;">
+        🛍️ ໜ້າຫຼັກ
+      </button>
+      <button onclick="goToPage('admin')" id="adminBtn" style="flex:1;padding:12px;background:#ffdad9;color:#845051;border:none;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;display:none;">
+        ⚙️ Admin
+      </button>
+    </div>
+    <button onclick="closeSuccess()" style="margin-top:14px;width:100%;padding:10px;background:none;border:1px solid #d6c2c1;border-radius:12px;font-size:13px;color:#514343;cursor:pointer;">
+      ອອກຈາກໜ້ານີ້
+    </button>
+  </div>
+</div>
+
+<script>
+// ── Thin auth wrapper — delegates to LuxeDB.session ──────
+let currentRole = 'customer';
+
+// ============================================================
+//  UI HELPERS
+// ============================================================
+
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type === 'error' ? 'error-toast' : type}`;
+  setTimeout(() => t.classList.remove('show'), 3200);
+}
+
+function togglePw(fieldId, btn) {
+  const input = document.getElementById(fieldId);
+  const icon  = btn.querySelector('.material-symbols-outlined');
+  if (input.type === 'password') {
+    input.type = 'text';
+    icon.textContent = 'visibility_off';
+  } else {
+    input.type = 'password';
+    icon.textContent = 'visibility';
+  }
+}
+
+function switchTab(tab) {
+  const isLogin = tab === 'login';
+  document.getElementById('loginForm').style.display    = isLogin ? 'block' : 'none';
+  document.getElementById('registerForm').style.display = isLogin ? 'none'  : 'block';
+  document.getElementById('tabLogin').classList.toggle('active',    isLogin);
+  document.getElementById('tabRegister').classList.toggle('active', !isLogin);
+  clearErrors();
+}
+
+function clearErrors() {
+  document.querySelectorAll('.field-error').forEach(e => e.classList.remove('show'));
+  document.querySelectorAll('.field-input').forEach(e => e.classList.remove('error'));
+}
+
+function showError(inputId, errId) {
+  document.getElementById(inputId)?.classList.add('error');
+  document.getElementById(errId)?.classList.add('show');
+}
+
+function selectRole(role) {
+  currentRole = role;
+  document.getElementById('roleCustomer').classList.toggle('selected', role === 'customer');
+  document.getElementById('roleAdmin').classList.toggle('selected',    role === 'admin');
+}
+
+function setLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  btn.disabled = loading;
+  btn.classList.toggle('loading', loading);
+}
+
+// Password strength
+function checkStrength(pw) {
+  const segs   = [document.getElementById('s1'), document.getElementById('s2'),
+                  document.getElementById('s3'), document.getElementById('s4')];
+  const label  = document.getElementById('strengthLabel');
+  const colors = ['#ba1a1a','#f0bd8b','#845051','#4caf50'];
+  const labels = ['ອ່ອນຫຼາຍ','ພໍໄດ້','ດີ','ແຂງແຮງ'];
+
+  let score = 0;
+  if (pw.length >= 6)  score++;
+  if (pw.length >= 10) score++;
+  if (/[A-Z]/.test(pw) || /[0-9]/.test(pw)) score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+  segs.forEach((s, i) => {
+    s.style.background = i < score ? colors[Math.max(0, score-1)] : 'var(--outline-variant)';
+  });
+  label.textContent   = pw ? labels[Math.max(0, score-1)] : '';
+  label.style.color   = pw ? colors[Math.max(0, score-1)] : 'var(--outline)';
+}
+
+// ============================================================
+//  AUTH LOGIC
+// ============================================================
+
+async function handleLogin() {
+  clearErrors();
+  const email = document.getElementById('loginEmail').value.trim();
+  const pw    = document.getElementById('loginPassword').value;
+  let valid = true;
+
+  if (!email || !email.includes('@')) { showError('loginEmail','loginEmailErr');    valid=false; }
+  if (!pw || pw.length < 6)           { showError('loginPassword','loginPasswordErr'); valid=false; }
+  if (!valid) return;
+
+  setLoading('loginBtn', true);
+  await delay(600);
+
+  try {
+    const sess = await LuxeDB.session.login(email, pw);
+
+    // Remember me → persist to localStorage too
+    if (document.getElementById('rememberMe').checked) {
+      localStorage.setItem('luxe_user', JSON.stringify({ id:sess.userId, name:sess.name, role:sess.role, avatar:sess.avatar }));
+    }
+
+    setLoading('loginBtn', false);
+    await renderUsersList();
+    showSuccessOverlay(sess, 'login');
+  } catch(err) {
+    showToast(err.message, 'error');
+    setLoading('loginBtn', false);
+  }
+}
+
+async function handleRegister() {
+  clearErrors();
+  const name    = document.getElementById('regName').value.trim();
+  const email   = document.getElementById('regEmail').value.trim();
+  const phone   = document.getElementById('regPhone').value.trim();
+  const pw      = document.getElementById('regPassword').value;
+  const confirm = document.getElementById('regConfirm').value;
+  const agreed  = document.getElementById('agreeTerms').checked;
+  let valid = true;
+
+  if (!name)                          { showError('regName','regNameErr');         valid=false; }
+  if (!email||!email.includes('@'))   { showError('regEmail','regEmailErr');       valid=false; }
+  if (!pw||pw.length<6)               { showError('regPassword','regPasswordErr'); valid=false; }
+  if (pw !== confirm)                 { showError('regConfirm','regConfirmErr');   valid=false; }
+  if (!valid) return;
+  if (!agreed) { showToast('ກະລຸນາຍອມຮັບເງື່ອນໄຂການໃຊ້ງານ','info'); return; }
+
+  setLoading('registerBtn', true);
+  await delay(700);
+
+  try {
+    const newUser = await LuxeDB.session.register({ name, email, password:pw, phone, role:currentRole });
+
+    setLoading('registerBtn', false);
+    await renderUsersList();
+    showSuccessOverlay({ name:newUser.name, role:newUser.role }, 'register');
+  } catch(err) {
+    const errMsg = err.message||'ເກີດຂໍ້ຜິດພາດ';
+    if (errMsg.includes('ຖືກໃຊ້')) {
+      document.getElementById('regEmailErr').textContent = errMsg;
+      showError('regEmail','regEmailErr');
+    }
+    showToast(errMsg, 'error');
+    setLoading('registerBtn', false);
+  }
+}
+
+async function demoLogin(role) {
+  const creds = { admin:['admin@luxebeauty.la','admin123'], customer:['suda@gmail.com','suda1234'] };
+  const [em,pw] = creds[role]||creds.customer;
+  document.getElementById('loginEmail').value    = em;
+  document.getElementById('loginPassword').value = pw;
+  switchTab('login');
+  showToast('ໂຫລດຂໍ້ມູນ Demo...','info');
+  await delay(300);
+  handleLogin();
+}
+
+function forgotPassword() {
+  const email = document.getElementById('loginEmail').value.trim();
+  if (!email) {
+    showToast('ກະລຸນາໃສ່ອີເມລຂອງທ່ານກ່ອນ', 'info');
+    document.getElementById('loginEmail').focus();
+    return;
+  }
+  showToast(`📧 ສົ່ງລິ້ງຣີເຊັດໄປຫາ ${email} ແລ້ວ!`, 'info');
+}
+
+// ── Success overlay ───────────────────────────────────────────
+function showSuccessOverlay(user, action) {
+  const overlay = document.getElementById('successOverlay');
+  const title   = document.getElementById('successTitle');
+  const msg     = document.getElementById('successMsg');
+  const adminBtn= document.getElementById('adminBtn');
+
+  if (action === 'login') {
+    title.textContent = '✓ ເຂົ້າສູ່ລະບົບສຳເລັດ!';
+    msg.textContent   = `ຍິນດີຕ້ອນຮັບ, ${user.name} (${user.role === 'admin' ? 'ຜູ້ຈັດການ' : 'ລູກຄ້າ'})`;
+  } else {
+    title.textContent = '🎉 ສ້າງບັນຊີສຳເລັດ!';
+    msg.textContent   = `ຍິນດີຕ້ອນຮັບ ${user.name}! ບັນຊີຂອງທ່ານພ້ອມໃຊ້ງານແລ້ວ`;
+  }
+
+  adminBtn.style.display = user.role === 'admin' ? 'block' : 'none';
+  overlay.style.display  = 'flex';
+}
+
+function closeSuccess() {
+  document.getElementById('successOverlay').style.display = 'none';
+}
+
+function goToPage(page) {
+  if (page === 'home')  { showToast('🏠 ໄປຫາໜ້າຫຼັກ...', 'info');  setTimeout(() => { window.location.href = 'luxe_home.html';  }, 800); }
+  if (page === 'admin') { showToast('⚙️ ໄປຫາ Admin...', 'info');    setTimeout(() => { window.location.href = 'luxe_admin.html'; }, 800); }
+}
+
+// ── Users list from LuxeDB.session ───────────────────────────
+async function renderUsersList() {
+  const list  = document.getElementById('usersList');
+  list.innerHTML = '<div style="font-size:12px;color:var(--outline);text-align:center;padding:8px 0;">ກຳລັງໂຫລດ...</div>';
+  try {
+    const users = await LuxeDB.session.getAll();
+    if (!users.length) { list.innerHTML='<div style="font-size:12px;color:var(--outline);text-align:center;padding:8px 0;">ຍັງບໍ່ມີຜູ້ໃຊ້</div>'; return; }
+    list.innerHTML = users.map(u => `
+      <div class="user-row">
+        <div class="user-avatar">${(u.avatar||u.name.charAt(0)).toUpperCase()}</div>
+        <div class="user-info">
+          <div class="user-name">${escHtml(u.name)}</div>
+          <div class="user-email">${escHtml(u.email)}</div>
+          ${u.lastLogin ? `<div style="font-size:10px;color:var(--outline);">ເຂົ້າລ: ${new Date(u.lastLogin).toLocaleDateString('lo-LA')}</div>` : ''}
+        </div>
+        <span class="user-role-badge ${u.role==='admin'?'badge-admin':'badge-customer'}">${u.role==='admin'?'Admin':'ລູກຄ້າ'}</span>
+        <button class="user-del" onclick="deleteUser(${u.id})" title="ລຶບ">
+          <span class="material-symbols-outlined">delete</span>
+        </button>
+      </div>`).join('');
+  } catch(e) { list.innerHTML='<div style="font-size:12px;color:var(--error);padding:8px 0;">Error: '+e.message+'</div>'; }
+}
+
+async function deleteUser(id) {
+  if (!confirm('ທ່ານຕ້ອງການລຶບຜູ້ໃຊ້ນີ້ບໍ?')) return;
+  await LuxeDB.session.delete(id);
+  renderUsersList();
+  showToast('ລຶບຜູ້ໃຊ້ສຳເລັດ','info');
+}
+
+// ── Utilities ─────────────────────────────────────────────────
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── INIT — delegates to LuxeDB ───────────────────────────────
+async function init() {
+  const dot  = document.getElementById('dbDot');
+  const stat = document.getElementById('dbStatusText');
+  try {
+    await LuxeDB.init();
+    dot.classList.add('connected');
+    stat.textContent = 'LuxeBeautyDB v3 ເຊື່ອມຕໍ່ສຳເລັດ ✓';
+    await renderUsersList();
+  } catch(err) {
+    stat.textContent = 'Database Error: '+err.message;
+    showToast('ບໍ່ສາມາດເປີດ Database ໄດ້','error');
+  }
+}
+init();
+
+// Allow Enter key submit
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const loginVisible = document.getElementById('loginForm').style.display !== 'none';
+  if (loginVisible) handleLogin();
+  else handleRegister();
+});
+</script>
+</body>
+</html>

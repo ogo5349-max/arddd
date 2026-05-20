@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="lo">
+<head>
+<script>
+/**
+ * ============================================================
+ * LUXE BEAUTY — Shared IndexedDB Database Layer  v3.0
+ * Stores: products | orders | orderItems | customers
+ * activityLog | sessions | users
+ * New v3: session auth | monthly chart from DB | cancelOrder
+ * updateStock | customer level auto-upgrade
+ * ============================================================
+ */
+const LuxeDB = (() => {
+  const DB_NAME='LuxeBeautyDB', DB_VERSION=3;
+  let _db=null;
+
+  function open(){
+    return new Promise((res,rej)=>{
+      if(_db){res(_db);return;}
+      const r=indexedDB.open(DB_NAME,DB_VERSION);
+      r.onupgradeneeded=e=>{
+        const db=e.target.result;
+        if(!db.objectStoreNames.contains('products')){const s=db.createObjectStore('products',{keyPath:'id'});s.createIndex('category','category',{unique:false});}
+        if(!db.objectStoreNames.contains('orders')){const s=db.createObjectStore('orders',{keyPath:'id',autoIncrement:true});s.createIndex('status','status',{unique:false});s.createIndex('customerId','customerId',{unique:false});s.createIndex('createdAt','createdAt',{unique:false});}
+        if(!db.objectStoreNames.contains('orderItems')){const s=db.createObjectStore('orderItems',{keyPath:'id',autoIncrement:true});s.createIndex('orderId','orderId',{unique:false});s.createIndex('productId','productId',{unique:false});}
+        if(!db.objectStoreNames.contains('customers')){const s=db.createObjectStore('customers',{keyPath:'id',autoIncrement:true});s.createIndex('email','email',{unique:true});s.createIndex('level','level',{unique:false});}
+        if(!db.objectStoreNames.contains('activityLog')){const s=db.createObjectStore('activityLog',{keyPath:'id',autoIncrement:true});s.createIndex('time','time',{unique:false});s.createIndex('type','type',{unique:false});}
+        if(!db.objectStoreNames.contains('sessions')){db.createObjectStore('sessions',{keyPath:'id'});}
+        if(!db.objectStoreNames.contains('users')){const s=db.createObjectStore('users',{keyPath:'id',autoIncrement:true});s.createIndex('email','email',{unique:true});s.createIndex('role','role',{unique:false});}
+      };
+      r.onsuccess=e=>{_db=e.target.result;res(_db);};
+      r.onerror=e=>rej(e.target.error);
+    });
+  }
+
+  const gs=(n,m='readonly')=>_db.transaction(n,m).objectStore(n);
+  const p2=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});
+  const getAll=(n)=>p2(gs(n).getAll());
+  const getById=(n,id)=>p2(gs(n).get(id));
+  const byIdx=(n,idx,v)=>p2(gs(n).index(idx).getAll(v));
+  const addR=(n,r)=>p2(gs(n,'readwrite').add(r));
+  const putR=(n,r)=>p2(gs(n,'readwrite').put(r));
+  const delR=(n,id)=>p2(gs(n,'readwrite').delete(id));
+
+  const I={
+    p1:'https://images.unsplash.com/photo-1608248597481-496100c8c836?auto=format&fit=crop&w=150&q=80',
+    p2:'https://images.unsplash.com/photo-1601049541289-9b1b7bbbfe19?auto=format&fit=crop&w=150&q=80',
+    p3:'https://images.unsplash.com/photo-1586495777744-4413f21062fa?auto=format&fit=crop&w=150&q=80',
+    p4:'https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?auto=format&fit=crop&w=150&q=80',
+    p5:'https://images.unsplash.com/photo-1556229174-5e42a09e45af?auto=format&fit=crop&w=150&q=80',
+    p6:'https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=150&q=80',
+    p7:'https://images.unsplash.com/photo-1603006905003-be475563bc59?auto=format&fit=crop&w=150&q=80',
+    p8:'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=150&q=80',
+  };
+
+  const SL={'pending':'ລໍຖ້າ','processing':'ກຳລັງດຳເນີນ','shipping':'ກຳລັງສົ່ງ','delivered':'ສົ່ງສຳເລັດ','cancelled':'ຍົກເລີກ'};
+  const SF=['pending','processing','shipping','delivered'];
+  const rid=()=>'LX-'+(800000+Math.floor(Math.random()*99999));
+  const dia=n=>{const d=new Date();d.setDate(d.getDate()-n);return d.toISOString();};
+
+  async function seed(){
+    if(!(await getAll('users')).length){
+      const users=[
+        {email:'admin@luxebeauty.la',password:'admin123',name:'Admin ລຸກຊ໌',role:'admin',phone:'020 9999 0001',avatar:'A'},
+        {email:'suda@gmail.com',password:'suda1234',name:'ນາງ ສຸດາ',role:'customer',phone:'020 5555 1234',avatar:'ສ'},
+        {email:'mala@gmail.com',password:'mala1234',name:'ນາງ ມາລາ',role:'customer',phone:'020 7777 5432',avatar:'ມ'},
+      ];
+      for(const u of users){try{await addR('users',u);}catch(e){}}
+    }
+    if(!(await getAll('products')).length){
+      const prods=[
+        {id:1,name:'ເຊລຸ່ມ ໂຣສ ໄຮເດຣຊັ່ນ',category:'skincare',price:85,stock:24,badge:'ຂາຍດີ',revenue:62050,stars:5,reviews:128,desc:'ລ້ຽງຜິວ ແລະ ໃຫ້ຄວາມຊຸ່ມຊື່ນ',img:I.p1},
+        {id:2,name:'Silk Radiance Oil',category:'skincare',price:120,stock:28,badge:'ໃໝ່',revenue:48500,stars:4,reviews:85,desc:'ນ້ຳຫອມ ຄວາມສ່ອງໄສ ສຳລັບຜິວ',img:I.p2},
+        {id:3,name:'Velvet Lip Tint',category:'makeup',price:35,stock:56,badge:'',revenue:34020,stars:5,reviews:203,desc:'ສີ ລິ້ນ ຄຸນນະພາບສູງ',img:I.p3},
+        {id:4,name:'Dew Mist Sheet Mask',category:'skincare',price:42,stock:12,badge:'ຂາຍດີ',revenue:21500,stars:4,reviews:67,desc:'ສ້ຳຊຸ່ມ ແລະ ສົດຊື່ນ ທັນທີ',img:I.p4},
+        {id:5,name:'Troye Cold Cleanser',category:'bath',price:58,stock:18,badge:'',revenue:18000,stars:4,reviews:44,desc:'ລ້ານ ລ້ຽງ ຜິວໜ້າ',img:I.p5},
+        {id:6,name:'Pro Pore Minimizer',category:'skincare',price:68,stock:9,badge:'',revenue:14200,stars:5,reviews:91,desc:'ຂັດ ຂຸມຂຸນ ໃຫ້ໜ້ານ້ອຍ',img:I.p6},
+        {id:7,name:'ເທຍນ ໂບທານਿ ໂຣສ & ຊີດາ',category:'wellness',price:45,stock:88,badge:'',revenue:12000,stars:4,reviews:156,desc:'ນ້ຳຫອມ ທຳມະຊາດ ສຳລັບ ສຸຂະພາບ',img:I.p7},
+        {id:8,name:'Luxe Brush Set',category:'makeup',price:120,stock:15,badge:'ໃໝ່',revenue:8500,stars:5,reviews:38,desc:'ຊຸດ ແປງ ດູ ແລ ຜິວໜ້ານ',img:I.p8},
+      ];
+      for(const p of prods) await putR('products',p);
+    }
+    if(!(await getAll('customers')).length){
+      const custs=[
+        {name:'ນາງ ສຸດາ ພົມມະວົງ',email:'suda@gmail.com',phone:'020 5555 1234',level:'ທອງ',avatar:'ສ',orders:12,totalSpent:1240,joinedAt:'2023-06-01'},
+        {name:'ທ້າວ ໂກ ວິໄລ',email:'ko@gmail.com',phone:'020 2222 9876',level:'ເງິນ',avatar:'ໂ',orders:5,totalSpent:480,joinedAt:'2024-01-15'},
+        {name:'ນາງ ມາລາ ໄຊ',email:'mala@gmail.com',phone:'020 7777 5432',level:'ເພັດ',avatar:'ມ',orders:28,totalSpent:3850,joinedAt:'2022-11-20'},
+        {name:'ທ้าວ ສີ ທອນ',email:'si@gmail.com',phone:'020 3333 1111',level:'ທຳມະດາ',avatar:'ສ',orders:2,totalSpent:95,joinedAt:'2024-09-01'},
+      ];
+      for(const c of custs){try{await addR('customers',c);}catch(e){}}
+    }
+    if(!(await getAll('orders')).length){
+      const custs=await getAll('customers');
+      const prods=await getAll('products');
+      const defs=[
+        [150,[1,2],0,'delivered'],[140,[3,4],2,'delivered'],[120,[7],1,'delivered'],
+        [110,[5,6],3,'delivered'],[90,[1,3,8],2,'delivered'],[85,[2],0,'delivered'],
+        [70,[4,7],1,'delivered'],[60,[3],2,'delivered'],[50,[1],0,'delivered'],
+        [45,[5,8],3,'delivered'],[40,[6],2,'delivered'],[30,[2,3],0,'delivered'],
+        [25,[7],1,'delivered'],[20,[1,4],2,'delivered'],[15,[8],0,'delivered'],
+        [10,[3,5],3,'delivered'],[7,[6],1,'shipping'],[4,[2],2,'shipping'],
+        [2,[1,7],0,'processing'],[0,[4,1,2,3],3,'pending'],
+      ];
+      for(const [days,pids,ci,status] of defs){
+        const c=custs[ci]||custs[0];
+        const items=pids.map(id=>prods.find(p=>p.id===id)).filter(Boolean);
+        const total=items.reduce((s,p)=>s+p.price,0);
+        const oid=await addR('orders',{orderId:rid(),customerId:c.id||1,customerName:c.name,status,statusLao:SL[status],total,totalFmt:'$'+total.toFixed(2),payMethod:'ບັດເຄດິດ',address:'ນະຄອນຫຼວງ ວຽງຈັນ',note:'',createdAt:dia(days),updatedAt:dia(Math.max(0,days-1)),rating:status==='delivered'?5:null});
+        for(const p of items) {
+          const mockQty = Math.floor(Math.random() * 3) + 1;
+          await addR('orderItems',{orderId:oid,productId:p.id,productName:p.name,productImg:p.img,price:p.price,qty:mockQty,subtotal:p.price*mockQty});
+        }
+      }
+    }
+  }
+
+  const session={
+    currentUser(){
+      const r=sessionStorage.getItem('luxe_sess_v3');
+      if(r){try{return JSON.parse(r);}catch(e){}}
+      return {name: "ນາງ ສຸດາ", role: "customer", email: "suda@gmail.com"};
+    },
+    requireAuth(){return true;}
+  };
+
+  const products={
+    getById:id=>getById('products',id),
+  };
+
+  const orders={
+    getAll:async()=>{const os=await getAll('orders');return os.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));},
+    getById:id=>getById('orders',id),
+    getItems:oid=>byIdx('orderItems','orderId',oid),
+    async cancelOrder(id){
+      const o=await getById('orders',id);
+      if(!o) throw new Error('ບໍ່ພົບຄຳສັ່ງ');
+      o.status='cancelled'; o.statusLao='ຍົກເລີກ'; await putR('orders',o);
+      return o;
+    }
+  };
+
+  async function init(){await open();await seed();return true;}
+  return{init,session,products,orders,STATUS:{FLOW:SF,LAO:SL}};
+})();
+</script>
+
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  *:not(.material-symbols-outlined) { font-family: 'Noto Sans Lao', sans-serif !important; }
+  .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 50; }
+  .modal.open { display: flex; }
+</style>
+<title>LUXE BEAUTY | ຄຳສັ່ງຊື້ຂອງຂ້ອຍ</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+</head>
+
+<body class="bg-[#fff8f7] text-[#1f1a1b] min-h-screen pb-16">
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10">
+    
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-gray-200/60 pb-6 mb-10 gap-4">
+      <div>
+        <h1 class="text-3xl font-bold text-[#340f11] tracking-tight">ປະຫວັດການສັ່ງຊື້</h1>
+        <p class="text-base text-gray-500 mt-1">ຕິດຕາມສະຖານະ ແລະ ປະຫວັດລາຍການສັ່ງຊື້ທັງໝົດຂອງທ່ານ</p>
+      </div>
+      <div>
+        <button onclick="window.location.href='luxe_home.html'" class="inline-flex items-center gap-2.5 text-base font-semibold text-white bg-[#845051] px-6 py-3 rounded-2xl hover:opacity-90 shadow-sm transition">
+          <span class="material-symbols-outlined text-xl">arrow_back</span> ກັບໄປໜ້າຮ້ານຄ້າ
+        </button>
+      </div>
+    </div>
+
+    <div id="orderList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+      <div class="col-span-full text-center py-12">
+        <p class="text-gray-400 text-base">⏳ ກຳລັງໂຫຼດຂໍ້ມູນຄຳສັ່ງຊື້...</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="trackModal" class="modal p-4">
+    <div class="bg-white rounded-3xl max-w-lg w-full p-8 shadow-2xl max-h-[85vh] overflow-y-auto">
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+<script>
+async function initPage() {
+  await LuxeDB.init();
+  renderOrders();
+}
+
+async function renderOrders() {
+  const container = document.getElementById('orderList');
+  try {
+    const list = await LuxeDB.orders.getAll();
+    if(!list.length) {
+      container.innerHTML = `
+      <div class="col-span-full text-center py-20 bg-white rounded-3xl border border-gray-100 p-10 shadow-sm">
+        <span class="material-symbols-outlined text-6xl text-gray-300 mb-4">shopping_bag</span>
+        <p class="text-gray-500 text-base">ທ່ານຍັງບໍ່ມີປະຫວັດການສັ່ງຊື້ເທື່ອ</p>
+      </div>`;
+      return;
+    }
+
+    let html = '';
+    for(const o of list) {
+      const items = await LuxeDB.orders.getItems(o.id);
+      if(!items.length) continue;
+
+      const firstItem = items[0];
+      const itemText = items.length > 1 ? `${firstItem.productName} ແລະ ອື່ນໆອີກ ${items.length - 1} ລາຍການ` : firstItem.productName;
+
+      // ລະບົບ Multi-image support (💡 ຂະຫຍາຍຂະໜາດຮູບໃຫ້ໃຫຍ່ຂຶ້ນເປັນ w-16 h-16)
+      const maxDisplay = 3; 
+      const displayItems = items.slice(0, maxDisplay);
+      const remainingItemsCount = items.length - maxDisplay;
+
+      let imagesHtml = `<div class="flex items-center -space-x-4 isolate select-none mr-3">`;
+      
+      displayItems.forEach((item, index) => {
+        // 💡 ປັບ Badge ຈຳນວນ x${qty} ໃຫ້ໃຫຍ່ ແລະ ອ່ານງ່າຍຂຶ້ນ
+        const qtyBadge = item.qty ? `<span class="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">x${item.qty}</span>` : '';
+        
+        imagesHtml += `
+          <div class="relative w-16 h-16 rounded-2xl bg-white border border-gray-100 shadow-sm flex-shrink-0" style="z-index: ${30 - index}">
+            <img src="${item.productImg || 'https://via.placeholder.com/60'}" class="w-full h-full object-cover rounded-2xl" />
+            ${qtyBadge}
+          </div>`;
+      });
+
+      if (remainingItemsCount > 0) {
+        imagesHtml += `
+          <div class="relative w-16 h-16 rounded-2xl bg-neutral-900/80 backdrop-blur-sm text-white border border-gray-200 flex items-center justify-center text-sm font-bold shadow-sm flex-shrink-0" style="z-index: 10">
+            +${remainingItemsCount}
+          </div>`;
+      }
+      imagesHtml += `</div>`;
+
+      let statusColor = 'bg-yellow-50 text-yellow-700 border-yellow-200';
+      if(o.status === 'delivered') statusColor = 'bg-green-50 text-green-700 border-green-200';
+      if(o.status === 'cancelled') statusColor = 'bg-red-50 text-red-700 border-red-200';
+      if(o.status === 'shipping') statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+
+      // 💡 ຂະຫຍາຍ Padding ແລະ ຕົວໜັງສືພາຍໃນ Card ທັງໝົດ
+      html += `
+      <div class="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-md transition flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between border-b border-gray-50 pb-4 mb-5">
+            <div>
+              <span class="text-xs font-mono text-gray-400 block">ID: ${o.orderId}</span>
+              <span class="text-sm text-gray-500 font-medium">${new Date(o.createdAt).toLocaleDateString('lo-LA', {day:'numeric', month:'short', year:'numeric'})}</span>
+            </div>
+            <span class="text-xs px-3 py-1 rounded-full border ${statusColor} font-semibold">${o.statusLao}</span>
+          </div>
+          <div class="flex gap-4 items-center mb-6">
+            ${imagesHtml}
+            <div class="flex-1 min-w-0 ml-1">
+              <p class="text-sm font-bold text-gray-800 truncate">${itemText}</p>
+              <p class="text-lg font-black text-[#845051] mt-1">$${o.total.toFixed(2)}</p>
+            </div>
+          </div>
+        </div>
+        <div class="flex gap-3 justify-end pt-4 border-t border-gray-50 mt-auto">
+          ${o.status !== 'delivered' && o.status !== 'cancelled' ? `<button onclick="cancelOrder(${o.id})" class="px-5 py-2.5 border border-gray-200 text-gray-500 rounded-xl text-sm font-semibold hover:bg-gray-50 transition">ຍົກເລີກ</button>` : ''}
+          <button onclick="trackOrder(${o.id})" class="px-5 py-2.5 bg-[#845051] text-white rounded-xl text-sm font-semibold hover:opacity-90 shadow-sm transition">ເບິ່ງລາຍລະອຽດ</button>
+        </div>
+      </div>`;
+    }
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = `<div class="col-span-full text-center text-red-500 py-6 text-sm">ເກີດຂໍ້ຜິດພາດ: ${e.message}</div>`;
+  }
+}
+
+async function trackOrder(id) {
+  const o = await LuxeDB.orders.getById(id);
+  const items = await LuxeDB.orders.getItems(id);
+  
+  const steps = [
+    { k:'pending', l:'ລໍຖ້າກວດສອບ' },
+    { k:'processing', l:'ກຳລັງຈັດກຽມ' },
+    { k:'shipping', l:'ກຳລັງຈັດສົ່ງ' },
+    { k:'delivered', l:'ສົ່ງສຳເລັດ' }
+  ];
+  
+  let currentIdx = steps.findIndex(s => s.k === o.status);
+  if(o.status === 'cancelled') currentIdx = -1;
+
+  // 💡 ຂະຫຍາຍລາຍການສິນຄ້າພາຍໃນ Modal (img: w-14 h-14, text-sm)
+  let itemsHtml = items.map(i => `
+    <div class="flex items-center gap-4 py-3.5 border-b border-gray-100 last:border-none">
+      <img src="${i.productImg || 'https://via.placeholder.com/50'}" class="w-14 h-14 rounded-2xl object-cover border border-gray-100 flex-shrink-0"/>
+      <div class="flex-1 min-w-0">
+        <p class="font-bold text-sm text-gray-800 truncate">${i.productName}</p>
+        <p class="text-xs text-gray-400 mt-1">$${i.price.toFixed(2)} <span class="text-[#845051] font-black ml-1.5">x ${i.qty || 1}</span></p>
+      </div>
+      <div class="text-sm font-black text-gray-800">
+        $${((i.price) * (i.qty || 1)).toFixed(2)}
+      </div>
+    </div>
+  `).join('');
+
+  const modalContent = document.getElementById('modalContent');
+  modalContent.innerHTML = `
+    <div class="flex justify-between items-start mb-5">
+      <div>
+        <h3 class="text-lg font-bold text-gray-900">ລາຍລະອຽດຄຳສັ່ງຊື້</h3>
+        <p class="text-xs font-mono text-gray-400 mt-0.5">ID: ${o.orderId}</p>
+      </div>
+      <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 p-1">
+        <span class="material-symbols-outlined text-2xl">close</span>
+      </button>
+    </div>
+
+    <div class="bg-gray-50/70 rounded-3xl p-4 mb-5 max-h-[260px] overflow-y-auto">
+      ${itemsHtml}
+    </div>
+
+    <div class="border-b border-gray-100 pb-4 mb-5 text-sm space-y-2.5">
+      <div class="flex justify-between text-gray-500">
+        <span>ວິທີຊຳລະ:</span>
+        <span class="font-semibold text-gray-800">${o.payMethod}</span>
+      </div>
+      <div class="flex justify-between text-gray-500">
+        <span>ທີ່ຢູ່ຈັດສົ່ງ:</span>
+        <span class="font-semibold text-gray-800 truncate max-w-[260px]">${o.address}</span>
+      </div>
+      <div class="flex justify-between text-base font-bold text-gray-900 pt-3 border-t border-dashed border-gray-200 mt-3">
+        <span>ຍົດລວມທັງໝົດ:</span>
+        <span class="text-[#845051] text-xl font-black">$${o.total.toFixed(2)}</span>
+      </div>
+    </div>
+
+    <h4 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-4">ສະຖານະການຈັດສົ່ງ</h4>
+    ${o.status === 'cancelled' ? `
+      <div class="flex items-center gap-3 bg-red-50 text-red-700 p-3.5 rounded-2xl border border-red-100">
+        <span class="material-symbols-outlined text-xl">cancel</span>
+        <span class="text-sm font-semibold">ຄຳສັ່ງຊື້ຖືກຍົກເລີກແລ້ວ</span>
+      </div>
+    ` : `
+      <div class="relative pl-10 space-y-7 before:absolute before:left-[15px] before:top-3 before:bottom-3 before:w-[2px] before:bg-gray-100">
+        ${steps.map((s, idx) => {
+          const isDone = idx <= currentIdx;
+          const isCurrent = idx === currentIdx;
+          
+          let circleStyle = 'border-gray-200 bg-white text-transparent';
+          if (isCurrent) {
+            circleStyle = 'border-emerald-500 bg-emerald-500 text-white';
+          } else if (isDone) {
+            circleStyle = 'border-[#845051] bg-[#845051] text-white';
+          }
+
+          return `
+          <div class="relative flex gap-4 items-center">
+            <div class="absolute -left-[36px] w-8 h-8 rounded-full border-2 flex items-center justify-center transition-all shadow-sm ${circleStyle}" style="z-index: 10;">
+              ${isCurrent ? 
+                // 💡 ຂະຫຍາຍໄອຄອນເຄື່ອງໝາຍຕິກໃຫ້ໃຫຍ່ຂຶ້ນເປັນ text-base (16px) ເຕັມວົງມົນຊັດເຈນ
+                `<span class="material-symbols-outlined text-base font-black">check</span>
+                 <div class="absolute -inset-2 bg-emerald-500 rounded-full animate-ping opacity-20 -z-10"></div>` 
+                : (isDone ? '<span class="material-symbols-outlined text-sm font-bold">check</span>' : '')
+              }
+            </div>
+            <p class="text-sm pl-1 transition-colors ${isCurrent ? 'text-emerald-600 font-bold text-[15px]' : (isDone ? 'text-gray-800 font-semibold' : 'text-gray-400')}">${s.l}</p>
+          </div>`;
+        }).join('')}
+      </div>
+    `}
+    <button onclick="closeModal()" class="w-full mt-6 bg-[#845051] text-white text-sm font-bold py-3 rounded-2xl hover:opacity-90 transition">ປິດໜ້າຕ່າງ</button>
+  `;
+  document.getElementById('trackModal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('trackModal').classList.remove('open');
+}
+
+async function cancelOrder(id) {
+  if(!confirm('ທ່ານແນ່ໃຈບໍທີ່ຈະຍົກເລີກຄຳສັ່ງຊື້ນີ້?')) return;
+  try {
+    await LuxeDB.orders.cancelOrder(id);
+    renderOrders();
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+window.onload = initPage;
+</script>
+</body>
+</html>

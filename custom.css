@@ -1,0 +1,119 @@
+@font-face {
+  font-family: 'Phetsarath OT';
+  src: url('https://cdn.jsdelivr.net/gh/nicowillis/fonts@master/PhetsarathOT.ttf') format('truetype');
+  font-weight: normal; 
+  font-style: normal; 
+  font-display: swap;
+}
+
+*:not(.material-symbols-outlined) { 
+  font-family: 'Phetsarath OT', 'Noto Sans Lao', sans-serif !important; 
+}
+
+body { 
+  background-color: #fff8f7; 
+  color: #1f1a1b; 
+}
+
+.card-shadow { 
+  box-shadow: 0 4px 20px rgba(0,0,0,0.04); 
+}
+
+.nav-link.active { 
+  background: #ffdad9; 
+  color: #845051; 
+  font-weight: 700; 
+}
+
+.toast { 
+  position: fixed; 
+  bottom: 24px; 
+  right: 24px; 
+  background: #845051; 
+  color: #fff; 
+  padding: 14px 22px; 
+  border-radius: 12px; 
+  font-size: 14px; 
+  font-weight: 600; 
+  z-index: 9999; 
+  transform: translateX(200px); 
+  opacity: 0; 
+  transition: all 0.4s ease; 
+  pointer-events: none; 
+}
+
+.toast.show { 
+  transform: translateX(0); 
+  opacity: 1; 
+}
+
+.modal { 
+  position: fixed; 
+  inset: 0; 
+  background: rgba(0,0,0,0.45); 
+  z-index: 300; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  opacity: 0; 
+  pointer-events: none; 
+  transition: opacity 0.3s; 
+}
+
+.modal.open { 
+  opacity: 1; 
+  pointer-events: all; 
+}
+
+.modal-box { 
+  background: #fff8f7; 
+  border-radius: 20px; 
+  padding: 32px; 
+  max-width: 520px; 
+  width: 90%; 
+  transform: translateY(20px); 
+  transition: transform 0.3s; 
+  max-height: 90vh; 
+  overflow-y: auto; 
+}
+
+.modal.open .modal-box { 
+  transform: translateY(0); 
+}
+
+.section-content { 
+  display: none; 
+}
+
+.section-content.active { 
+  display: block; 
+}
+
+@keyframes fadeIn { 
+  from { opacity: 0; transform: translateY(10px) } 
+  to { opacity: 1; transform: translateY(0) } 
+}
+
+.section-content.active { 
+  animation: fadeIn 0.3s ease; 
+}
+
+.progress-bar { 
+  transition: width 1s ease; 
+}
+
+.sidebar-mobile { 
+  transform: translateX(-100%); 
+  transition: transform 0.3s ease; 
+}
+
+.sidebar-mobile.open { 
+  transform: translateX(0); 
+}
+
+@media(min-width:768px) { 
+  .sidebar-mobile { 
+    transform: none !important; 
+    position: relative; 
+  } 
+}
