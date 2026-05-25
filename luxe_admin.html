@@ -154,7 +154,7 @@ const LuxeDB = (() => {
     },
     currentUser(){
       const r=sessionStorage.getItem(SK);
-      if(r){try{return JSON.parse(r);}catch(e){}}
+      if(r){try{return JSON.parse(r);}catch(e){}};;
       const r2=localStorage.getItem('luxe_user');
       if(r2){try{return JSON.parse(r2);}catch(e){}}
       return null;

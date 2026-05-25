@@ -1097,14 +1097,14 @@ function closeJournalModal() { closeModalById('journalModal'); }
     // Session — show user nav pill
     const user = LuxeDB.session.currentUser();
     renderSessionNav(user);
-
-    // Load products from DB (real stock values)
+    // Load products from DB (real stock values & new products)
     const dbProds = await LuxeDB.products.getAll();
     if (dbProds.length > 0) {
-      dbProds.forEach(dp => {
-        const idx = products.findIndex(p => p.id === dp.id);
-        if (idx !== -1) products[idx] = { ...products[idx], ...dp };
-      });
+      // ລ້າງຂໍ້ມູນທີ່ Hardcode ໄວ້ຕອນທຳອິດອອກທັງໝົດ
+      products.length = 0; 
+      // ເອົາຂໍ້ມູນຈາກຖານຂໍ້ມູນ (Database) ມາໃສ່ແທນທີ່ 100%
+      dbProds.forEach(dp => products.push(dp)); 
+      
       filteredProducts = [...products];
       renderProducts(filteredProducts);
     }
