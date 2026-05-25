@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="lo">
+<head>
+<script>
+/**
+ * ============================================================
+ *  LUXE BEAUTY — Shared IndexedDB Database Layer  v3.0
+ *  Stores: products | orders | orderItems | customers
+ *          activityLog | sessions | users
+ *  New v3: session auth | monthly chart from DB | cancelOrder
+ *          updateStock | customer level auto-upgrade
+ * ============================================================
+ */
+const LuxeDB = (() => {
+  const DB_NAME='LuxeBeautyDB', DB_VERSION=3;
+  let _db=null;
+
+  function open(){
+    return new Promise((res,rej)=>{
+      if(_db){res(_db);return;}
+      const r=indexedDB.open(DB_NAME,DB_VERSION);
+      r.onupgradeneeded=e=>{
+        const db=e.target.result;
+        if(!db.objectStoreNames.contains('products')){const s=db.createObjectStore('products',{keyPath:'id'});s.createIndex('category','category',{unique:false});}
+        if(!db.objectStoreNames.contains('orders')){const s=db.createObjectStore('orders',{keyPath:'id',autoIncrement:true});s.createIndex('status','status',{unique:false});s.createIndex('customerId','customerId',{unique:false});s.createIndex('createdAt','createdAt',{unique:false});}
+        if(!db.objectStoreNames.contains('orderItems')){const s=db.createObjectStore('orderItems',{keyPath:'id',autoIncrement:true});s.createIndex('orderId','orderId',{unique:false});s.createIndex('productId','productId',{unique:false});}
+        if(!db.objectStoreNames.contains('customers')){const s=db.createObjectStore('customers',{keyPath:'id',autoIncrement:true});s.createIndex('email','email',{unique:true});s.createIndex('level','level',{unique:false});}
+        if(!db.objectStoreNames.contains('activityLog')){const s=db.createObjectStore('activityLog',{keyPath:'id',autoIncrement:true});s.createIndex('time','time',{unique:false});s.createIndex('type','type',{unique:false});}
+        if(!db.objectStoreNames.contains('sessions')){db.createObjectStore('sessions',{keyPath:'id'});}
+        if(!db.objectStoreNames.contains('users')){const s=db.createObjectStore('users',{keyPath:'id',autoIncrement:true});s.createIndex('email','email',{unique:true});s.createIndex('role','role',{unique:false});}
+      };
+      r.onsuccess=e=>{_db=e.target.result;res(_db);};
+      r.onerror=e=>rej(e.target.error);
+    });
+  }
+
+  const gs=(n,m='readonly')=>_db.transaction(n,m).objectStore(n);
+  const p2=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});
+  const getAll=(n)=>p2(gs(n).getAll());
+  const getById=(n,id)=>p2(gs(n).get(id));
+  const byIdx=(n,idx,v)=>p2(gs(n).index(idx).getAll(v));
+  const addR=(n,r)=>p2(gs(n,'readwrite').add(r));
+  const putR=(n,r)=>p2(gs(n,'readwrite').put(r));
+  const delR=(n,id)=>p2(gs(n,'readwrite').delete(id));
+
+  // Images
+  const I={
+    p1:'https://lh3.googleusercontent.com/aida-public/AB6AXuBK_xhfotC-hJHrvydSnpeXR52ybkl-yIwvWXCL-5bWpMftOKeJIxh-dq7HkYcAW1Ekg9Z0Qk4BgO6xD11a97_xrhGIG3_leiO52lnm0uCAaKHsgFnxzzG_fNpcimdJs2O6M38VktV07_VJW7y0Ettsc4Ow7fB11CJMRM1KsNz7EnCLq2F_NbVa3RluCPB5-jSwNP7EccawkYFc0lZ4t_togqhFEa9Q9IF10C6P02DKLqQSKLGiCfYGc3ggla7_SvYmy0-OuSCqUA',
+    p2:'https://lh3.googleusercontent.com/aida-public/AB6AXuCQ23uqezSJ4BJj_3P5MPpXNnmjS2q6MllJdlzQDQsuDbRejeIEd7iQlaj8DByTwI-wAOV3H9gYAJcMy4HyshSBhB9BmbH2VUfSv96epfZtngj75oV0ORz2lI7cU82xi1FA9eOc0z1u4eQGQnWg1f6ziTj3EPEMIgA6xDLescWpjxn3xXP_ahg51qxhDha7OLjLQ-ElGlLaDuWcyVsGZ-6o9HaqqBozMCiBSQFPaZAzsDs0RFDy2WZgPYQjJ2a39QrU0tQp5B7d4Q',
+    p3:'https://lh3.googleusercontent.com/aida-public/AB6AXuBjbJ2lBPTiOIinxDJIKPf2Ihk3kDkpcqChvkLrIfg_2SeEnTZc1L2awKJq2RNQned355UmLkAUYWcXI0xfwdKOQwELfV2poyLmzf239WkF9NuIPaVF8AewKt1LUunm8Pg5d4r-BfYfYxjYuCU78X1Qko0OKetwJERFwc3JabZvp2-eUIPswd8i57QxDEYvVxwiZNEzQhTklJSWor2bbd7AoqqWQ2qdxMy-JTpm0ihIvxz_VIJcFSUSYuYECsWaQhoXQB2WuFTPXQ',
+    p4:'https://lh3.googleusercontent.com/aida-public/AB6AXuCDwlWohr79S8_c80NzaqkGepsS5-mNShRlZQeTl1zirnZgvdEvrGb3ctMtkkwyfttF_uUk4a98m6Z8rEyDyfiKgPr-A8D5SX4gp-BMDk2j3VH3L3qq0CpOBY8ojpJGIIAmd4ceKSz6V6Pmdeslvf8WV7rlmcy8V0zQhf3gLzUhz7FqbkFBBXWhmL511BjGYnb0bxcWFuEtE4Lki7HxMT-bcffkBq9HDHQVy9jL_9mC_f37jhvg0AamQsbKUGDo18skofmanEFUqA',
+    p5:'https://lh3.googleusercontent.com/aida-public/AB6AXuB_ujU_c3cvn7B9_GxY4NTv-AZP3LWDieEUlYSBsYDuwZ5k9Kjb_q-GC2uMddRcw9uOhq0vCEzu-6rv_oKgt7Ah73MZWdbfMg1nQo_y8hWdQ_i0azirY9Fs9GXmzisRq__aT7wG5m26q4fPGBZvg4onYjBMdex1_ytQBGRD7uUkrwgypr33lq1ZmGQNR-Z6zxwrvFoBAQhojfZnYYRR_4fOgIVmth0HnUeZOTPiMs8qbP-g2KiXs147s_423SugadAVGyJ2OZV9Tg',
+    p6:'https://lh3.googleusercontent.com/aida-public/AB6AXuAsRIsHiMWGjJXeg2l54xBxcQOMfawpF3xgg2pOn-IcT3DNEiz3bBwkqwUBG3hK1GJurGpC13TCrXB95ZzlaIE2LgN-ujr6IrpX6-epuG9kLpFlRl_ODW5VDh7uIgw31mRM092411h5PHv9I5WF6RQh0sJ5SCIrLc-uhI7XC5S0D4_zcDh4d1eeLN9nFckmMJn_mu4mLHhGPYnpXwOJyYPj1mfSBY7_opDEBoXC5EAxklu8FZRrtQx607CWqI78bjXKB_J4SgbBnA',
+    p7:'https://lh3.googleusercontent.com/aida-public/AB6AXuDClCuqNAkIQ8y1isEI5W7H8QZdA1YacKg2e68AJfv-ZikTr0gMzRXccD1EejEK6zSaIO8MBCuv03G6bRiDz4-pfulvRJ4ZWEHyMSy4Zj02EWLZngcY6m6auB4TevqB2ufaggo4Z0rInWWbB4rFFFJDiQ2CmxjGe5cVTTlAwhfbKc5O_W8mlz0BEm3fqcJUqmxwS9FaFFARuCzqAbWmAo-8m8Vu2d1_eJmF6iG5LHfRbRt0RZ6R8VSNfNF-hy1SyxaK17YtC2OIVQ',
+    p8:'https://lh3.googleusercontent.com/aida-public/AB6AXuBKqOywIz70dd7YF2NpD3gXyADuz8JpWURey_UMdb9ocy9vMJQrEVVbOT9DEBwTIU18sxp3De-aHgCyEp--U7G62a_2KHiVKPCm65GO0h3ttCojSzYQqDqxRapNHjeZKCfgW8dCrZvkFe4AhPWZqAzIo2NAwZWvedSg90Xbuph-MVE9XF3eBxjjtCrSKkWrKpyv0QYDQcI862HavRnidDUVNpapsHehOhoA6AOniEYayLK8TkvCjhl2Fk56rpDK8ZX1Dd4Hu-2cNQ',
+  };
+
+  const SL={'pending':'ລໍຖ້າ','processing':'ກຳລັງດຳເນີນ','shipping':'ກຳລັງສົ່ງ','delivered':'ສົ່ງສຳເລັດ','cancelled':'ຍົກເລີກ'};
+  const SF=['pending','processing','shipping','delivered'];
+  const rid=()=>'LX-'+(800000+Math.floor(Math.random()*99999));
+  const dia=n=>{const d=new Date();d.setDate(d.getDate()-n);return d.toISOString();};
+
+  async function seed(){
+    // Users
+    if(!(await getAll('users')).length){
+      const users=[
+        {email:'admin@luxebeauty.la',password:'admin123',name:'Admin ລຸກຊ໌',role:'admin',phone:'020 9999 0001',avatar:'A'},
+        {email:'suda@gmail.com',password:'suda1234',name:'ນາງ ສຸດາ',role:'customer',phone:'020 5555 1234',avatar:'ສ'},
+        {email:'mala@gmail.com',password:'mala1234',name:'ນາງ ມາລາ',role:'customer',phone:'020 7777 5432',avatar:'ມ'},
+      ];
+      for(const u of users){try{await addR('users',u);}catch(e){}}
+    }
+    // Products
+    if(!(await getAll('products')).length){
+      const prods=[
+        {id:1,name:'ເຊລຸ່ມ ໂຣສ ໄຮເດຣຊັ່ນ',category:'skincare',price:85,stock:24,badge:'ຂາຍດີ',revenue:62050,stars:5,reviews:128,desc:'ລ້ຽງຜິວ ແລະ ໃຫ້ຄວາມຊຸ່ມຊື່ນ',img:I.p1},
+        {id:2,name:'Silk Radiance Oil',category:'skincare',price:120,stock:28,badge:'ໃໝ່',revenue:48500,stars:4,reviews:85,desc:'ນ້ຳຫອມ ຄວາມສ່ອງໄສ ສຳລັບຜິວ',img:I.p2},
+        {id:3,name:'Velvet Lip Tint',category:'makeup',price:35,stock:56,badge:'',revenue:34020,stars:5,reviews:203,desc:'ສີ ລິ້ນ ຄຸນນະພາບສູງ',img:I.p3},
+        {id:4,name:'Dew Mist Sheet Mask',category:'skincare',price:42,stock:12,badge:'ຂາຍດີ',revenue:21500,stars:4,reviews:67,desc:'ສ້ຳຊຸ່ມ ແລະ ສົດຊື່ນ ທັນທີ',img:I.p4},
+        {id:5,name:'Troye Cold Cleanser',category:'bath',price:58,stock:18,badge:'',revenue:18000,stars:4,reviews:44,desc:'ລ້ານ ລ້ຽງ ຜິວໜ້າ',img:I.p5},
+        {id:6,name:'Pro Pore Minimizer',category:'skincare',price:68,stock:9,badge:'',revenue:14200,stars:5,reviews:91,desc:'ຂັດ ຂຸມຂຸນ ໃຫ້ໜ້ານ້ອຍ',img:I.p6},
+        {id:7,name:'ເທຍນ ໂບທານິ ໂຣສ & ຊີດາ',category:'wellness',price:45,stock:88,badge:'',revenue:12000,stars:4,reviews:156,desc:'ນ້ຳຫອມ ທຳມະຊາດ ສຳລັບ ສຸຂະພາບ',img:I.p7},
+        {id:8,name:'Luxe Brush Set',category:'makeup',price:120,stock:15,badge:'ໃໝ່',revenue:8500,stars:5,reviews:38,desc:'ຊຸດ ແປງ ດູ ແລ ຜິວໜ້ານ',img:I.p8},
+      ];
+      for(const p of prods) await putR('products',p);
+    }
+    // Customers
+    if(!(await getAll('customers')).length){
+      const custs=[
+        {name:'ນາງ ສຸດາ ພົມມະວົງ',email:'suda@gmail.com',phone:'020 5555 1234',level:'ທອງ',avatar:'ສ',orders:12,totalSpent:1240,joinedAt:'2023-06-01'},
+        {name:'ທ້າວ ໂກ ວິໄລ',email:'ko@gmail.com',phone:'020 2222 9876',level:'ເງິນ',avatar:'ໂ',orders:5,totalSpent:480,joinedAt:'2024-01-15'},
+        {name:'ນາງ ມາລາ ໄຊ',email:'mala@gmail.com',phone:'020 7777 5432',level:'ເພັດ',avatar:'ມ',orders:28,totalSpent:3850,joinedAt:'2022-11-20'},
+        {name:'ທ້າວ ສີ ທອນ',email:'si@gmail.com',phone:'020 3333 1111',level:'ທຳມະດາ',avatar:'ສ',orders:2,totalSpent:95,joinedAt:'2024-09-01'},
+      ];
+      for(const c of custs){try{await addR('customers',c);}catch(e){}}
+    }
+    // Orders — 20 seed orders spread across 6 months
+    if(!(await getAll('orders')).length){
+      const custs=await getAll('customers');
+      const prods=await getAll('products');
+      const defs=[
+        [150,[1,2],0,'delivered'],[140,[3,4],2,'delivered'],[120,[7],1,'delivered'],
+        [110,[5,6],3,'delivered'],[90,[1,3,8],2,'delivered'],[85,[2],0,'delivered'],
+        [70,[4,7],1,'delivered'],[60,[3],2,'delivered'],[50,[1],0,'delivered'],
+        [45,[5,8],3,'delivered'],[40,[6],2,'delivered'],[30,[2,3],0,'delivered'],
+        [25,[7],1,'delivered'],[20,[1,4],2,'delivered'],[15,[8],0,'delivered'],
+        [10,[3,5],3,'delivered'],[7,[6],1,'shipping'],[4,[2],2,'shipping'],
+        [2,[1,7],0,'processing'],[0,[4],3,'pending'],
+      ];
+      for(const [days,pids,ci,status] of defs){
+        const c=custs[ci]||custs[0];
+        const items=pids.map(id=>prods.find(p=>p.id===id)).filter(Boolean);
+        const total=items.reduce((s,p)=>s+p.price,0);
+        const oid=await addR('orders',{orderId:rid(),customerId:c.id||1,customerName:c.name,status,statusLao:SL[status],total,totalFmt:'$'+total.toFixed(2),payMethod:'ບັດເຄດິດ',address:'ນະຄອນຫຼວງ ວຽງຈັນ',note:'',createdAt:dia(days),updatedAt:dia(Math.max(0,days-1)),rating:status==='delivered'?5:null});
+        for(const p of items) await addR('orderItems',{orderId:oid,productId:p.id,productName:p.name,productImg:p.img,price:p.price,qty:1,subtotal:p.price});
+      }
+      const logs=[
+        {type:'order',icon:'shopping_bag',action:'ຄຳສັ່ງໃໝ່ ເຂົ້າລະບົບ',user:'ລະບົບ',time:dia(0)},
+        {type:'stock',icon:'inventory_2',action:'ອັບເດດ Stock: ເຊລຸ່ມ → 24 ຊິ້ນ',user:'Admin',time:dia(1)},
+        {type:'user',icon:'person_add',action:'ລູກຄ້າໃໝ່ ທ້າວ ສີ ທອນ ລົງທະບຽນ',user:'ລະບົບ',time:dia(2)},
+        {type:'order',icon:'local_shipping',action:'ອັບເດດ → ກຳລັງສົ່ງ',user:'Admin',time:dia(3)},
+        {type:'product',icon:'add_shopping_cart',action:'ເພີ່ມສິນຄ້າ: Luxe Brush Set',user:'Admin',time:dia(7)},
+      ];
+      for(const l of logs){try{await addR('activityLog',l);}catch(e){}}
+    }
+  }
+
+  /* ── SESSION / AUTH ─── */
+  const SK='luxe_sess_v3';
+  const session={
+    async login(email,password){
+      const users=await getAll('users');
+      const u=users.find(x=>x.email.toLowerCase()===email.toLowerCase().trim()&&x.password===password);
+      if(!u) throw new Error('ອີເມລ ຫຼື ລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ');
+      u.lastLogin=new Date().toISOString();
+      await putR('users',u);
+      const s={id:'current',userId:u.id,name:u.name,email:u.email,role:u.role,avatar:u.avatar||u.name[0],loginAt:new Date().toISOString()};
+      await putR('sessions',s);
+      sessionStorage.setItem(SK,JSON.stringify(s));
+      await activityLog.add('user','login','ເຂົ້າສູ່ລະບົບ: '+u.name,u.name);
+      return s;
+    },
+    async register({name,email,password,phone,role='customer'}){
+      const users=await getAll('users');
+      if(users.find(u=>u.email.toLowerCase()===email.toLowerCase())) throw new Error('ອີເມລນີ້ຖືກໃຊ້ງານແລ້ວ');
+      const nu={name,email:email.toLowerCase(),password,phone,role,avatar:name[0],createdAt:new Date().toISOString()};
+      const id=await addR('users',nu); nu.id=id;
+      if(role==='customer'){try{await addR('customers',{name,email:email.toLowerCase(),phone,level:'ທຳມະດາ',avatar:name[0],orders:0,totalSpent:0,joinedAt:new Date().toISOString().slice(0,10)});}catch(e){}}
+      await activityLog.add('user','person_add','ສ້າງບັນຊີ: '+name,'ລະບົບ');
+      return nu;
+    },
+    async logout(){
+      try{await delR('sessions','current');}catch(e){}
+      sessionStorage.removeItem(SK);
+      localStorage.removeItem('luxe_user');
+    },
+    currentUser(){
+      const r=sessionStorage.getItem(SK);
+      if(r){try{return JSON.parse(r);}catch(e){}}
+      const r2=localStorage.getItem('luxe_user');
+      if(r2){try{return JSON.parse(r2);}catch(e){}}
+      return null;
+    },
+    requireAuth(to='luxe_login.html'){if(!this.currentUser()){window.location.href=to;return false;}return true;},
+    requireAdmin(to='luxe_login.html'){const u=this.currentUser();if(!u||u.role!=='admin'){window.location.href=to;return false;}return true;},
+    async getAll(){return getAll('users');},
+    async delete(id){return delR('users',id);},
+  };
+
+  /* ── PRODUCTS ─── */
+  const products={
+    getAll:()=>getAll('products'),
+    getById:id=>getById('products',id),
+    getByCategory:cat=>byIdx('products','category',cat),
+    save:p=>putR('products',p),
+    delete:id=>delR('products',id),
+    async deductStock(pid,qty){
+      const p=await getById('products',pid);
+      if(!p) throw new Error('ບໍ່ພົບສິນຄ້າ');
+      if(p.stock<qty) throw new Error(`"${p.name}" ສາງບໍ່ພໍ (ເຫຼືອ ${p.stock})`);
+      p.stock-=qty; await putR('products',p); return p;
+    },
+    async updateStock(pid,newStock){
+      const p=await getById('products',pid);
+      if(!p) throw new Error('ບໍ່ພົບສິນຄ້າ');
+      const old=p.stock; p.stock=parseInt(newStock)||0;
+      await putR('products',p);
+      await activityLog.add('stock','inventory_2',`Stock "${p.name}": ${old}→${p.stock}`,'Admin');
+      return p;
+    },
+  };
+
+  /* ── ORDERS ─── */
+  const orders={
+    getAll:async()=>{const os=await getAll('orders');return os.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));},
+    getById:id=>getById('orders',id),
+    getItems:oid=>byIdx('orderItems','orderId',oid),
+    getByStatus:async s=>{const all=await getAll('orders');return(s==='all'?all:all.filter(o=>o.status===s)).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));},
+    async place({customerName,address,payMethod,note,cartItems}){
+      if(!cartItems?.length) throw new Error('ກະຕ່າວ່າງ');
+      for(const i of cartItems) await products.deductStock(i.id,i.qty);
+      const total=cartItems.reduce((s,i)=>s+i.price*i.qty,0);
+      const oid=await addR('orders',{orderId:rid(),customerId:1,customerName:customerName||'ລູກຄ້າ',status:'pending',statusLao:'ລໍຖ້າ',total,totalFmt:'$'+total.toFixed(2),payMethod:payMethod||'ເງິນສົດ',address:address||'',note:note||'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),rating:null});
+      for(const i of cartItems){
+        await addR('orderItems',{orderId:oid,productId:i.id,productName:i.name,productImg:i.img,price:i.price,qty:i.qty,subtotal:i.price*i.qty});
+        const p=await getById('products',i.id);
+        if(p){p.revenue=(p.revenue||0)+i.price*i.qty;await putR('products',p);}
+      }
+      await activityLog.add('order','shopping_bag',`ຄຳສັ່ງໃໝ່ ${customerName||'ລູກຄ້າ'} — $${total.toFixed(2)}`,'ລະບົບ');
+      return oid;
+    },
+    async updateStatus(id,status){
+      const o=await getById('orders',id);
+      if(!o) throw new Error('ບໍ່ພົບຄຳສັ່ງ');
+      o.status=status; o.statusLao=SL[status]||status; o.updatedAt=new Date().toISOString();
+      await putR('orders',o);
+      await activityLog.add('order','local_shipping',`#${o.orderId} → ${SL[status]||status}`,'Admin');
+      return o;
+    },
+    async cancelOrder(id){
+      const o=await getById('orders',id);
+      if(!o) throw new Error('ບໍ່ພົບຄຳສັ່ງ');
+      if(o.status==='delivered') throw new Error('ຍົກເລີກຄຳສັ່ງທີ່ສົ່ງແລ້ວບໍ່ໄດ້');
+      const items=await byIdx('orderItems','orderId',id);
+      for(const i of items){const p=await getById('products',i.productId);if(p){p.stock+=i.qty;await putR('products',p);}}
+      o.status='cancelled'; o.statusLao='ຍົກເລີກ'; o.updatedAt=new Date().toISOString();
+      await putR('orders',o);
+      await activityLog.add('order','cancel',`ຍົກເລີກ #${o.orderId}`,'ລູກຄ້າ');
+      return o;
+    },
+    async getSummary(){
+      const all=await getAll('orders');
+      const items=await getAll('orderItems');
+      const active=all.filter(o=>o.status!=='cancelled');
+      const rev=active.reduce((s,o)=>s+(o.total||0),0);
+      return{total:all.length,revenue:rev,pending:all.filter(o=>o.status==='pending').length,processing:all.filter(o=>o.status==='processing').length,shipping:all.filter(o=>o.status==='shipping').length,delivered:all.filter(o=>o.status==='delivered').length,cancelled:all.filter(o=>o.status==='cancelled').length,itemsSold:items.reduce((s,i)=>s+(i.qty||1),0),avgOrder:active.length?(rev/active.length):0};
+    },
+    async getMonthlyRevenue(months=6){
+      const all=await getAll('orders');
+      const now=new Date();
+      const LM=['ມ.ກ.','ກ.ພ.','ມ.ນ.','ມ.ສ.','ພ.ຄ.','ມ.ຖ.','ກ.ກ.','ສ.ຫ.','ກ.ຍ.','ຕ.ລ.','ພ.ຈ.','ທ.ວ.'];
+      const result=[];
+      for(let m=months-1;m>=0;m--){
+        const d=new Date(now.getFullYear(),now.getMonth()-m,1);
+        const mo=all.filter(o=>{const od=new Date(o.createdAt);return od.getFullYear()===d.getFullYear()&&od.getMonth()===d.getMonth()&&o.status!=='cancelled';});
+        result.push({label:LM[d.getMonth()],revenue:mo.reduce((s,o)=>s+(o.total||0),0),orders:mo.length});
+      }
+      return result;
+    },
+    delete:id=>delR('orders',id),
+  };
+
+  /* ── CUSTOMERS ─── */
+  const customers={
+    getAll:()=>getAll('customers'),
+    getById:id=>getById('customers',id),
+    save:c=>putR('customers',c),
+    delete:id=>delR('customers',id),
+    async updateFromOrder(cid,spent){
+      try{
+        const all=await getAll('customers');
+        const c=all.find(x=>x.id===cid)||all[0];
+        if(!c) return;
+        c.orders=(c.orders||0)+1; c.totalSpent=(c.totalSpent||0)+spent;
+        if(c.totalSpent>=3000) c.level='ເພັດ';
+        else if(c.totalSpent>=1000) c.level='ທອງ';
+        else if(c.totalSpent>=400) c.level='ເງິນ';
+        else c.level='ທຳມະດາ';
+        await putR('customers',c);
+      }catch(e){}
+    },
+  };
+
+  /* ── ACTIVITY LOG ─── */
+  const activityLog={
+    getAll:async()=>{const l=await getAll('activityLog');return l.sort((a,b)=>new Date(b.time)-new Date(a.time)).slice(0,60);},
+    add:(type,icon,action,user)=>addR('activityLog',{type,icon,action,user,time:new Date().toISOString()}),
+  };
+
+  async function init(){await open();await seed();return true;}
+  const STATUS={FLOW:SF,LAO:SL};
+
+  return{init,session,products,orders,customers,activityLog,STATUS};
+})();
+
+</script>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+@font-face {
+  font-family: 'Phetsarath OT';
+  src: url('https://cdn.jsdelivr.net/gh/nicowillis/fonts@master/PhetsarathOT.ttf') format('truetype');
+  font-weight: normal; font-style: normal; font-display: swap;
+}
+*:not(.material-symbols-outlined) { font-family: 'Phetsarath OT', 'Noto Sans Lao', sans-serif !important; }
+</style>
+<title>LUXE BEAUTY | ສິນຄ້າດູແລຜິວ & ການດູແລຄວາມງາມລະດັບສູງ</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Hanken+Grotesk:wght@300;400;500;600&family=Inter:wght@400;600&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+tailwind.config = {
+  darkMode: "class",
+  theme: {
+    extend: {
+      colors: {
+        "on-secondary-fixed-variant":"#4e4541","secondary-container":"#ebddd7","on-primary-fixed-variant":"#69393a","on-tertiary-fixed-variant":"#623f18","primary-fixed-dim":"#f8b6b5","surface":"#fff8f7","on-tertiary-container":"#5e3c15","outline-variant":"#d6c2c1","surface-variant":"#eae0e0","surface-container-lowest":"#ffffff","tertiary-fixed":"#ffdcbd","inverse-on-surface":"#f9eeee","secondary-fixed":"#eedfda","surface-container-high":"#f0e6e5","secondary":"#675c58","primary-fixed":"#ffdad9","inverse-surface":"#342f2f","on-error":"#ffffff","on-background":"#1f1a1b","surface-container":"#f6ebeb","on-tertiary-fixed":"#2c1600","outline":"#847373","on-surface":"#1f1a1b","on-primary-container":"#643637","on-primary":"#ffffff","tertiary":"#7d562d","tertiary-container":"#d8a777","on-secondary-fixed":"#211a17","on-secondary":"#ffffff","secondary-fixed-dim":"#d2c4be","on-error-container":"#93000a","error":"#ba1a1a","surface-dim":"#e2d8d7","surface-container-low":"#fcf1f1","surface-bright":"#fff8f7","on-primary-fixed":"#340f11","on-tertiary":"#ffffff","on-surface-variant":"#514343","on-secondary-container":"#6b605c","background":"#fff8f7","surface-container-highest":"#eae0e0","inverse-primary":"#f8b6b5","surface-tint":"#845051","error-container":"#ffdad6","primary":"#845051","primary-container":"#e0a0a0","tertiary-fixed-dim":"#f0bd8b"
+      },
+      borderRadius:{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},
+      spacing:{"unit":"8px","margin-desktop":"40px","gutter":"16px","container-max":"1200px","margin-mobile":"20px"},
+      fontFamily:{"title-md":["Plus Jakarta Sans"],"headline-lg":["Plus Jakarta Sans"],"display":["Plus Jakarta Sans"],"body-sm":["Hanken Grotesk"],"label-caps":["Inter"],"headline-lg-mobile":["Plus Jakarta Sans"],"body-lg":["Hanken Grotesk"]},
+      fontSize:{"title-md":["18px",{"lineHeight":"1.4","fontWeight":"500"}],"headline-lg":["28px",{"lineHeight":"1.3","fontWeight":"600"}],"display":["40px",{"lineHeight":"1.2","letterSpacing":"-0.02em","fontWeight":"600"}],"body-sm":["14px",{"lineHeight":"1.5","fontWeight":"400"}],"label-caps":["12px",{"lineHeight":"1","letterSpacing":"0.05em","fontWeight":"600"}],"headline-lg-mobile":["24px",{"lineHeight":"1.3","fontWeight":"600"}],"body-lg":["16px",{"lineHeight":"1.6","fontWeight":"400"}]}
+    }
+  }
+}
+</script>
+<style>
+  .material-symbols-outlined { font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24; }
+  .hide-scrollbar::-webkit-scrollbar { display:none; }
+  .hide-scrollbar { -ms-overflow-style:none; scrollbar-width:none; }
+  @keyframes fadeInUp { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes slideInLeft { from{opacity:0;transform:translateX(-30px)} to{opacity:1;transform:translateX(0)} }
+  .hero-text { animation: slideInLeft 0.8s ease forwards; }
+  .hero-badge { animation: fadeInUp 0.6s ease 0.2s both; }
+  .hero-actions { animation: fadeInUp 0.6s ease 0.5s both; }
+  .product-card { transition: all 0.3s ease; }
+  .product-card:hover { transform: translateY(-4px); box-shadow: 0 20px 40px rgba(132,80,81,0.12); }
+  .cart-badge { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.15)} }
+  .toast { position:fixed; bottom:24px; right:24px; background:#845051; color:#fff; padding:14px 22px; border-radius:12px; font-size:14px; font-weight:600; z-index:9999; transform:translateX(200px); opacity:0; transition:all 0.4s ease; pointer-events:none; }
+  .toast.show { transform:translateX(0); opacity:1; }
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:100; opacity:0; pointer-events:none; transition:opacity 0.3s; }
+  .overlay.open { opacity:1; pointer-events:all; }
+  .cart-drawer { position:fixed; right:0; top:0; bottom:0; width:380px; background:#fff8f7; z-index:101; transform:translateX(100%); transition:transform 0.4s ease; display:flex; flex-direction:column; }
+  .cart-drawer.open { transform:translateX(0); }
+  .mobile-menu { position:fixed; inset:0; background:#fff8f7; z-index:200; transform:translateX(-100%); transition:transform 0.3s ease; }
+  .mobile-menu.open { transform:translateX(0); }
+  .filter-btn.active { background:#845051; color:#fff; }
+  @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+  .rating-star { color: #d8a777; }
+</style>
+</head>
+<body class="bg-background text-on-background font-body-lg">
+
+<!-- Toast Notification -->
+<div class="toast" id="toast">✓ ເພີ່ມໃສ່ກະຕ່າແລ້ວ!</div>
+
+<!-- Cart Overlay -->
+<div class="overlay" id="cartOverlay" onclick="closeCart()"></div>
+
+<!-- Cart Drawer -->
+<div class="cart-drawer shadow-2xl" id="cartDrawer">
+  <div class="flex items-center justify-between p-6 border-b border-outline-variant/30">
+    <h2 class="font-headline-lg text-xl text-on-surface">ກະຕ່າສິນຄ້າ</h2>
+    <button onclick="closeCart()" class="p-2 hover:bg-surface-container rounded-lg transition-colors">
+      <span class="material-symbols-outlined text-on-surface-variant">close</span>
+    </button>
+  </div>
+  <div class="flex-1 overflow-y-auto p-6" id="cartItems">
+    <div class="text-center py-16 text-on-surface-variant" id="emptyCart">
+      <span class="material-symbols-outlined text-5xl mb-4 block opacity-30">shopping_bag</span>
+      <p class="font-body-sm text-body-sm">ກະຕ່າຂອງທ່ານຍັງວ່າງຢູ່</p>
+    </div>
+  </div>
+  <div class="p-6 border-t border-outline-variant/30" id="cartFooter" style="display:none">
+    <div class="flex justify-between items-center mb-4">
+      <span class="font-body-lg text-on-surface-variant">ລວມທັງໝົດ</span>
+      <span class="font-headline-lg text-xl text-primary" id="cartTotal">$0.00</span>
+    </div>
+    <button onclick="openCheckoutModal()" class="block w-full bg-primary text-on-primary text-center font-label-caps py-4 rounded-xl hover:opacity-90 transition-opacity mb-3">🛒 ຊຳລະເງິນ</button>
+    <button onclick="closeCart()" class="block w-full border border-primary text-primary text-center font-label-caps py-3 rounded-xl hover:bg-primary/5 transition-colors">ສືບຕໍ່ຊື້ສິນຄ້າ</button>
+  </div>
+</div>
+
+<!-- ການດູແລ Modal -->
+<div class="modal" id="careModal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.3s;">
+  <div class="modal-box" style="background:#fff8f7;border-radius:24px;padding:0;max-width:680px;width:92%;transform:translateY(20px);transition:transform 0.3s;max-height:88vh;overflow-y:auto;">
+    <div style="background:linear-gradient(135deg,#ffdad9 0%,#f8b6b5 100%);border-radius:24px 24px 0 0;padding:32px 32px 24px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;">
+        <div>
+          <span style="font-family:'Inter',sans-serif;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:#845051;display:block;margin-bottom:8px;">ຄູ່ມືຜິວໜັງ</span>
+          <h3 style="font-family:'Plus Jakarta Sans',sans-serif;font-size:26px;font-weight:700;color:#1f1a1b;margin:0;">ການດູແລຄວາມງາມ</h3>
+        </div>
+        <button onclick="closeCareModal()" style="background:rgba(255,255,255,0.6);border:none;border-radius:12px;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined" style="font-size:20px;color:#514343;">close</span>
+        </button>
+      </div>
+    </div>
+    <div style="padding:28px 32px 32px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
+        <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;padding:20px;">
+          <div style="width:44px;height:44px;background:#ffdad9;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:14px;">
+            <span class="material-symbols-outlined" style="color:#845051;font-size:22px;">wb_sunny</span>
+          </div>
+          <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:15px;color:#1f1a1b;margin:0 0 8px;">ຕອນເຊົ້າ</h4>
+          <ol style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;line-height:1.7;margin:0;padding-left:16px;">
+            <li>ລ້ານໜ້າ ດ້ວຍ Cleanser</li>
+            <li>ທາ Toner ເພື່ອ pH ສົມດຸນ</li>
+            <li>ທາ Serum (Vitamin C)</li>
+            <li>ທາ Moisturizer</li>
+            <li>ທາ Sunscreen SPF50+</li>
+          </ol>
+        </div>
+        <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;padding:20px;">
+          <div style="width:44px;height:44px;background:#ffdcbd;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:14px;">
+            <span class="material-symbols-outlined" style="color:#7d562d;font-size:22px;">bedtime</span>
+          </div>
+          <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:15px;color:#1f1a1b;margin:0 0 8px;">ຕອນຄ່ຳ</h4>
+          <ol style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;line-height:1.7;margin:0;padding-left:16px;">
+            <li>ລ້ານເຄື່ອງສຳອາງ (Oil Cleanser)</li>
+            <li>ລ້ານໜ້າ 2 ຄັ້ງ (Double Cleanse)</li>
+            <li>ທາ Treatment / Retinol</li>
+            <li>ທາ Night Cream</li>
+            <li>ທາ Eye Cream ຮອບດວງຕາ</li>
+          </ol>
+        </div>
+      </div>
+      <div style="background:#f6ebeb;border-radius:16px;padding:20px;margin-bottom:20px;">
+        <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:15px;color:#845051;margin:0 0 12px;display:flex;align-items:center;gap:8px;"><span class="material-symbols-outlined" style="font-size:18px;">tips_and_updates</span>ຄຳແນະນຳຈາກຜູ້ຊ່ຽວຊານ</h4>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:start;font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;"><span style="color:#845051;font-weight:700;flex-shrink:0;">✦</span>ດື່ມນ້ຳ 8 ແກ້ວ/ວັນ ຊ່ວຍໃຫ້ຜິວຊຸ່ມຊື່ນຈາກພາຍໃນ</div>
+          <div style="display:flex;gap:10px;align-items:start;font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;"><span style="color:#845051;font-weight:700;flex-shrink:0;">✦</span>ໃຊ້ SPF ທຸກວັນ ເຖິງຢ່ານໄປດ້ານນອກ</div>
+          <div style="display:flex;gap:10px;align-items:start;font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;"><span style="color:#845051;font-weight:700;flex-shrink:0;">✦</span>ປ່ຽນໜ້ານ້ຳ ທຸກ 2-3 ມື້ ເພື່ອຫຼຸດ Bacteria</div>
+          <div style="display:flex;gap:10px;align-items:start;font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;"><span style="color:#845051;font-weight:700;flex-shrink:0;">✦</span>ນອນ 7-8 ຊ.ຊ. ຊ່ວຍໃຫ້ຜິວຟື້ນຕົວໃນຕອນກາງຄືນ</div>
+        </div>
+      </div>
+      <button onclick="filterProducts('skincare'); closeCareModal(); document.getElementById('shop').scrollIntoView({behavior:'smooth'})" style="width:100%;background:#845051;color:#fff;font-family:'Inter',sans-serif;font-size:12px;font-weight:700;letter-spacing:0.05em;padding:14px;border-radius:14px;border:none;cursor:pointer;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">ເລືອກຊື້ ສິນຄ້າດູແລຜິວ →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ສາຂາ Modal -->
+<div class="modal" id="branchModal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.3s;">
+  <div class="modal-box" style="background:#fff8f7;border-radius:24px;padding:0;max-width:600px;width:92%;transform:translateY(20px);transition:transform 0.3s;max-height:88vh;overflow-y:auto;">
+    <div style="background:linear-gradient(135deg,#1f1a1b 0%,#514343 100%);border-radius:24px 24px 0 0;padding:28px 28px 20px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;">
+        <div>
+          <span style="font-family:'Inter',sans-serif;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:#f8b6b5;display:block;margin-bottom:8px;">ວຽງຈັນ & ທົ່ວປະເທດ</span>
+          <h3 style="font-family:'Plus Jakarta Sans',sans-serif;font-size:24px;font-weight:700;color:#fff;margin:0;">ສາຂາຂອງເຮົາ</h3>
+        </div>
+        <button onclick="closeBranchModal()" style="background:rgba(255,255,255,0.15);border:none;border-radius:12px;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined" style="font-size:20px;color:#fff;">close</span>
+        </button>
+      </div>
+    </div>
+    <div style="padding:24px 28px 28px;display:flex;flex-direction:column;gap:14px;">
+      <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;padding:20px;display:flex;gap:16px;align-items:start;">
+        <div style="width:44px;height:44px;background:#ffdad9;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="material-symbols-outlined" style="color:#845051;font-size:20px;">store</span>
+        </div>
+        <div style="flex:1;">
+          <div style="display:flex;justify-content:space-between;align-items:start;">
+            <div>
+              <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:15px;color:#1f1a1b;margin:0 0 4px;">ສາຂາ ສີສັດຕະນາກ (ສຳນັກງານໃຫຍ່)</h4>
+              <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0 0 8px;">ບ້ານ ສີສັດຕະນາກ, ຈ. ສີໂຄດຕະບອງ, ນະຄອນຫຼວງ ວຽງຈັນ</p>
+              <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#7d562d;">📞 +856 20 123 4567</p>
+            </div>
+            <span style="background:#d4edda;color:#155724;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap;">ເປີດ</span>
+          </div>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#847373;margin:8px 0 0;">ຈ-ສ 09:00–20:00 · ອາທິດ 10:00–18:00</p>
+        </div>
+      </div>
+      <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;padding:20px;display:flex;gap:16px;align-items:start;">
+        <div style="width:44px;height:44px;background:#ffdad9;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="material-symbols-outlined" style="color:#845051;font-size:20px;">store</span>
+        </div>
+        <div style="flex:1;">
+          <div style="display:flex;justify-content:space-between;align-items:start;">
+            <div>
+              <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:15px;color:#1f1a1b;margin:0 0 4px;">ສາຂາ ໄຊທານີ</h4>
+              <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0 0 8px;">ໄຊທານີ ພລາຊ່າ, ຈ. ໄຊທານີ, ນະຄອນຫຼວງ ວຽງຈັນ</p>
+              <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#7d562d;">📞 +856 20 234 5678</p>
+            </div>
+            <span style="background:#d4edda;color:#155724;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap;">ເປີດ</span>
+          </div>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#847373;margin:8px 0 0;">ຈ-ສ 10:00–21:00 · ອາທິດ ປິດ</p>
+        </div>
+      </div>
+      <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;padding:20px;display:flex;gap:16px;align-items:start;">
+        <div style="width:44px;height:44px;background:#ffdcbd;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="material-symbols-outlined" style="color:#7d562d;font-size:20px;">store</span>
+        </div>
+        <div style="flex:1;">
+          <div style="display:flex;justify-content:space-between;align-items:start;">
+            <div>
+              <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:15px;color:#1f1a1b;margin:0 0 4px;">ສາຂາ ປາກເຊ (ສາລາວັນ)</h4>
+              <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0 0 8px;">ຖະໜົນ 5, ຈ. ປາກເຊ, ແຂວງ ຈຳປາສັກ</p>
+              <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#7d562d;">📞 +856 31 456 7890</p>
+            </div>
+            <span style="background:#fff3cd;color:#856404;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap;">ໃໝ່</span>
+          </div>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#847373;margin:8px 0 0;">ຈ-ສ 09:00–19:00 · ອາທິດ 10:00–17:00</p>
+        </div>
+      </div>
+      <div style="background:#f6ebeb;border-radius:14px;padding:16px;display:flex;gap:12px;align-items:center;">
+        <span class="material-symbols-outlined" style="color:#845051;font-size:20px;flex-shrink:0;">phone_in_talk</span>
+        <div>
+          <p style="font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:600;color:#1f1a1b;margin:0 0 3px;">ນັດໝາຍ ການດູແລຜິວ</p>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:#514343;margin:0;">ໂທ ຫຼື WhatsApp +856 20 123 4567</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ວາລະສານ Modal -->
+<div class="modal" id="journalModal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.3s;">
+  <div class="modal-box" style="background:#fff8f7;border-radius:24px;padding:0;max-width:680px;width:92%;transform:translateY(20px);transition:transform 0.3s;max-height:88vh;overflow-y:auto;">
+    <div style="padding:28px 32px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-family:'Inter',sans-serif;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:#845051;">ບົດຄວາມລ່າສຸດ</span>
+        <button onclick="closeJournalModal()" style="background:#f6ebeb;border:none;border-radius:10px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined" style="font-size:18px;color:#514343;">close</span>
+        </button>
+      </div>
+      <h3 style="font-family:'Plus Jakarta Sans',sans-serif;font-size:24px;font-weight:700;color:#1f1a1b;margin:0 0 24px;">ວາລະສານ ຄວາມງາມ</h3>
+    </div>
+    <div style="padding:0 32px 32px;display:flex;flex-direction:column;gap:16px;">
+      <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;overflow:hidden;display:flex;gap:0;">
+        <div style="width:100px;min-height:100px;background:linear-gradient(135deg,#ffdad9,#f8b6b5);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="material-symbols-outlined" style="color:#845051;font-size:32px;">spa</span>
+        </div>
+        <div style="padding:16px 18px;">
+          <span style="font-family:'Inter',sans-serif;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#7d562d;background:#ffdcbd;padding:2px 8px;border-radius:20px;">ດູແລຜິວ</span>
+          <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-size:15px;font-weight:700;color:#1f1a1b;margin:8px 0 6px;">5 ຂັ້ນຕອນ ດູແລຜິວ ສຳລັບຜູ້ເລີ່ມຕົ້ນ</h4>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0 0 8px;line-height:1.5;">ຄູ່ມືງ່າຍໆ ສຳລັບ routine ດູແລຜິວໜ້າ ທີ່ໄດ້ຜົນຈິງ</p>
+          <span style="font-family:'Hanken Grotesk',sans-serif;font-size:11px;color:#847373;">28 ພ.ສ. 2025 · 5 ນາທີ ອ່ານ</span>
+        </div>
+      </div>
+      <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;overflow:hidden;display:flex;gap:0;">
+        <div style="width:100px;min-height:100px;background:linear-gradient(135deg,#ffdcbd,#f0bd8b);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="material-symbols-outlined" style="color:#7d562d;font-size:32px;">face</span>
+        </div>
+        <div style="padding:16px 18px;">
+          <span style="font-family:'Inter',sans-serif;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#514343;background:#eae0e0;padding:2px 8px;border-radius:20px;">ເຄື່ອງສຳອາງ</span>
+          <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-size:15px;font-weight:700;color:#1f1a1b;margin:8px 0 6px;">Trend ເຄື່ອງສຳອາງ ທ້າຍປີ 2025</h4>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0 0 8px;line-height:1.5;">ສີ ແລະ ຮູບແບບທີ່ກຳລັງດັງໃນ ລະດູໃບໄມ້ຫຼົ່ນ ປີນີ້</p>
+          <span style="font-family:'Hanken Grotesk',sans-serif;font-size:11px;color:#847373;">15 ພ.ສ. 2025 · 4 ນາທີ ອ່ານ</span>
+        </div>
+      </div>
+      <div style="background:#fff;border:1px solid #ebddd7;border-radius:16px;overflow:hidden;display:flex;gap:0;">
+        <div style="width:100px;min-height:100px;background:linear-gradient(135deg,#ebddd7,#d2c4be);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="material-symbols-outlined" style="color:#675c58;font-size:32px;">eco</span>
+        </div>
+        <div style="padding:16px 18px;">
+          <span style="font-family:'Inter',sans-serif;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#155724;background:#d4edda;padding:2px 8px;border-radius:20px;">ທຳມະຊາດ</span>
+          <h4 style="font-family:'Plus Jakarta Sans',sans-serif;font-size:15px;font-weight:700;color:#1f1a1b;margin:8px 0 6px;">ສ່ວນປະກອບທຳມະຊາດ ທີ່ຜິວຮັກ</h4>
+          <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0 0 8px;line-height:1.5;">ຮູ້ຈັກ Hyaluronic Acid, Niacinamide ແລະ Retinol</p>
+          <span style="font-family:'Hanken Grotesk',sans-serif;font-size:11px;color:#847373;">5 ພ.ສ. 2025 · 7 ນາທີ ອ່ານ</span>
+        </div>
+      </div>
+      <div style="background:#f6ebeb;border-radius:14px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <p style="font-family:'Hanken Grotesk',sans-serif;font-size:13px;color:#514343;margin:0;">ສະໝັກ Newsletter ເພື່ອຮັບບົດຄວາມໃໝ່ທຸກອາທິດ</p>
+        <button onclick="closeJournalModal();document.getElementById('emailInput').focus();" style="background:#845051;color:#fff;border:none;font-family:'Inter',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.05em;padding:10px 18px;border-radius:12px;cursor:pointer;white-space:nowrap;">ສະໝັກ</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Mobile Menu -->
+<div class="mobile-menu" id="mobileMenu">
+  <div class="flex items-center justify-between p-6 border-b border-outline-variant/30">
+    <span class="font-display text-2xl text-primary">LUXE BEAUTY</span>
+    <button onclick="closeMobileMenu()" class="p-2">
+      <span class="material-symbols-outlined">close</span>
+    </button>
+  </div>
+  <nav class="p-6 space-y-4">
+    <a onclick="filterProducts('all'); closeMobileMenu()" class="flex items-center gap-3 py-4 border-b border-outline-variant/20 font-title-md text-on-surface hover:text-primary transition-colors cursor-pointer">
+      <span class="material-symbols-outlined text-primary">storefront</span>ຮ້ານຄ້າ
+    </a>
+    <a onclick="openCareModal(); closeMobileMenu()" class="flex items-center gap-3 py-4 border-b border-outline-variant/20 font-title-md text-on-surface hover:text-primary transition-colors cursor-pointer">
+      <span class="material-symbols-outlined text-primary">spa</span>ການດູແລ
+    </a>
+    <a onclick="openJournalModal(); closeMobileMenu()" class="flex items-center gap-3 py-4 border-b border-outline-variant/20 font-title-md text-on-surface hover:text-primary transition-colors cursor-pointer">
+      <span class="material-symbols-outlined text-primary">menu_book</span>ວາລະສານ
+    </a>
+    <a onclick="openJournalModal(); closeMobileMenu()" class="flex items-center gap-3 py-4 border-b border-outline-variant/20 font-title-md text-on-surface hover:text-primary transition-colors cursor-pointer">
+      <span class="material-symbols-outlined text-primary">info</span>ກ່ຽວກັບເຮົາ
+    </a>
+    <a onclick="openBranchModal(); closeMobileMenu()" class="flex items-center gap-3 py-4 border-b border-outline-variant/20 font-title-md text-on-surface hover:text-primary transition-colors cursor-pointer">
+      <span class="material-symbols-outlined text-primary">location_on</span>ສາຂາ
+    </a>
+    <a href="luxe_orders.html" class="flex items-center gap-3 py-4 border-b border-outline-variant/20 font-title-md text-on-surface hover:text-primary transition-colors">
+      <span class="material-symbols-outlined text-primary">receipt_long</span>ຄຳສັ່ງຊື້ຂອງຂ້ອຍ
+    </a>
+    <a href="luxe_admin.html" class="flex items-center gap-3 py-4 font-title-md text-on-surface hover:text-primary transition-colors">
+      <span class="material-symbols-outlined text-primary">admin_panel_settings</span>ຫ້ອງການຜູ້ຈັດການ
+    </a>
+  </nav>
+</div>
+
+<!-- Top Navigation -->
+<nav class="bg-surface/80 backdrop-blur-md sticky top-0 z-50 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+  <div class="flex justify-between items-center h-20 px-6 md:px-10 max-w-[1200px] mx-auto w-full">
+    <div class="flex items-center gap-10">
+      <a class="font-display text-2xl md:text-display tracking-tight text-primary" href="#">LUXE BEAUTY</a>
+      <div class="hidden md:flex gap-8 items-center">
+        <a onclick="filterProducts('all')" class="font-title-md text-[16px] text-on-surface-variant hover:text-primary transition-colors cursor-pointer">ຮ້ານຄ້າ</a>
+        <a onclick="openCareModal()" class="font-title-md text-[16px] text-on-surface-variant hover:text-primary transition-colors cursor-pointer">ການດູແລ</a>
+        <a onclick="openJournalModal()" class="font-title-md text-[16px] text-on-surface-variant hover:text-primary transition-colors cursor-pointer">ວາລະສານ</a>
+        <a class="font-title-md text-[16px] text-on-surface-variant hover:text-primary transition-colors cursor-pointer" onclick="openJournalModal()">ກ່ຽວກັບ</a>
+        <a onclick="openBranchModal()" class="font-title-md text-[16px] text-on-surface-variant hover:text-primary transition-colors cursor-pointer">ສາຂາ</a>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 md:gap-5">
+      <!-- Search -->
+      <div class="hidden md:flex items-center bg-surface-container rounded-full px-4 py-2 gap-2 border border-outline-variant/30">
+        <span class="material-symbols-outlined text-[20px] text-outline">search</span>
+        <input id="searchInput" oninput="searchProducts()" class="bg-transparent outline-none font-body-sm text-body-sm text-on-surface w-36 placeholder-outline" placeholder="ຄົ້ນຫາສິນຄ້າ..."/>
+      </div>
+      <!-- Wishlist -->
+      <button class="relative p-2 hover:bg-surface-container rounded-full transition-colors hidden md:flex">
+        <span class="material-symbols-outlined text-on-surface-variant">favorite</span>
+      </button>
+      <!-- Account -->
+      <a href="luxe_orders.html" class="relative p-2 hover:bg-surface-container rounded-full transition-colors hidden md:flex" title="ຄຳສັ່ງຊື້">
+        <span class="material-symbols-outlined text-on-surface-variant">person</span>
+      </a>
+      <!-- Cart -->
+      <button onclick="openCart()" class="relative p-2 hover:bg-surface-container rounded-full transition-colors">
+        <span class="material-symbols-outlined text-on-surface">shopping_bag</span>
+        <span id="cartCount" class="cart-badge absolute -top-1 -right-1 bg-primary text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style="display:none!important">0</span>
+      </button>
+      <!-- Admin -->
+      <a href="index.html" class="hidden md:flex items-center gap-2 bg-primary text-on-primary font-label-caps text-[11px] px-4 py-2 rounded-full hover:opacity-90 transition-opacity">
+        <span class="material-symbols-outlined text-[16px]">admin_panel_settings</span>ຜູ້ຈັດການ
+      </a>
+      <!-- Mobile hamburger -->
+      <button onclick="openMobileMenu()" class="md:hidden p-2">
+        <span class="material-symbols-outlined">menu</span>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<main>
+<!-- Hero Section -->
+<section class="relative bg-gradient-to-br from-surface via-surface-container-low to-secondary-container/30 overflow-hidden min-h-[580px] flex items-center">
+  <div class="absolute inset-0 opacity-5" style="background-image:radial-gradient(circle at 70% 50%, #845051 0%, transparent 60%)"></div>
+  <div class="absolute right-0 top-0 bottom-0 w-1/2 hidden lg:block">
+    <img class="w-full h-full object-cover opacity-80" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCwhEckhrRj1Q3jXBRpg6RfZ5lavt9PQ8Tpl7Nn2zl0qgtKdTp3JCsyWw2YGY8Icv5o6t6dEcmzvJv8XWRI1uAtCGuZpg-P7FzzdEw199kBjDhI60Ku7CkX_Yh-BM_1eMy75GdrtOo1DGB6-QaoxVXAlzeibcv23hGkt98IosS-NCbHuMZndXwZKB1AGtOA31Mzoq4IOHj5wnZ0Lzw62ROX--LtqAz7mXq-PumjEaZca7Sg-pHlYisTo3l5JGEMRHfjCZX4J0z-7Q"/>
+    <div class="absolute inset-0 bg-gradient-to-r from-surface via-surface/60 to-transparent"></div>
+  </div>
+  <div class="relative z-10 max-w-[1200px] mx-auto px-6 md:px-10 py-20 w-full">
+    <div class="max-w-xl">
+      <div class="hero-badge inline-flex items-center gap-2 bg-primary-container/40 text-primary font-label-caps text-[11px] px-4 py-2 rounded-full mb-6 border border-primary-container">
+        <span class="w-2 h-2 bg-primary rounded-full"></span>
+        ສິນຄ້າໃໝ່ — ພາກຮຽນຮ້ອນ 2025
+      </div>
+      <h1 class="hero-text font-display text-4xl md:text-5xl lg:text-[56px] text-on-surface leading-tight mb-6">
+        ຄວາມງາມ<br/>
+        <span class="text-primary">ທຳມະຊາດ</span><br/>
+        ແທ້ຈິງ
+      </h1>
+      <p class="hero-text font-body-lg text-body-lg text-on-surface-variant mb-8 max-w-md" style="animation-delay:0.2s">
+        ຄັດສັນຜະລິດຕະພັນດູແລຜິວໜັງຈາກທຳມະຊາດ ທີ່ຊ່ວຍໃຫ້ຜິວຂອງທ່ານ ສ່ອງໃສ ສຸຂະພາບດີ ແລະ ງາມຕາ
+      </p>
+      <div class="hero-actions flex flex-col sm:flex-row gap-4">
+        <button onclick="filterProducts('all'); document.getElementById('shop').scrollIntoView({behavior:'smooth'})" class="bg-primary text-on-primary font-label-caps text-[13px] px-8 py-4 rounded-xl hover:opacity-90 transition-all hover:shadow-lg hover:shadow-primary/20 flex items-center gap-2 justify-center">
+          <span class="material-symbols-outlined text-[18px]">storefront</span>ເລືອກຊື້ດຽວນີ້
+        </button>
+        <button class="border border-primary text-primary font-label-caps text-[13px] px-8 py-4 rounded-xl hover:bg-primary/5 transition-colors flex items-center gap-2 justify-center">
+          <span class="material-symbols-outlined text-[18px]">spa</span>ຂໍຮັບການດູແລ
+        </button>
+      </div>
+      <!-- Stats -->
+      <div class="flex gap-8 mt-12 pt-8 border-t border-outline-variant/30">
+        <div>
+          <p class="font-headline-lg text-2xl text-primary font-bold">12K+</p>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">ລູກຄ້າພໍໃຈ</p>
+        </div>
+        <div>
+          <p class="font-headline-lg text-2xl text-primary font-bold">200+</p>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">ຜະລິດຕະພັນ</p>
+        </div>
+        <div>
+          <p class="font-headline-lg text-2xl text-primary font-bold">100%</p>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">ທຳມະຊາດ</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Category Banner Strip -->
+<section class="bg-primary text-on-primary py-4 overflow-hidden">
+  <div class="flex gap-12 animate-[scroll_20s_linear_infinite] whitespace-nowrap">
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">eco</span>ທຳມະຊາດ 100%</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">local_shipping</span>ສົ່ງຟຣີ ເມື່ອຊື້ $50+</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">workspace_premium</span>ຜ່ານການທົດສອບຈາກຜິວໜັງ</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">recycling</span>ບໍ່ທົດລອງສັດ</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">eco</span>ທຳມະຊາດ 100%</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">local_shipping</span>ສົ່ງຟຣີ ເມື່ອຊື້ $50+</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">workspace_premium</span>ຜ່ານການທົດສອບຈາກຜິວໜັງ</span>
+    <span class="font-label-caps text-[11px] flex items-center gap-2"><span class="material-symbols-outlined text-[16px]">recycling</span>ບໍ່ທົດລອງສັດ</span>
+  </div>
+</section>
+
+<!-- Shop Section -->
+<section id="shop" class="max-w-[1200px] mx-auto px-6 md:px-10 py-20">
+  <div class="flex flex-col md:flex-row justify-between items-start md:items-end mb-10 gap-4">
+    <div>
+      <span class="font-label-caps text-[11px] text-primary tracking-widest uppercase block mb-2">ສິນຄ້າຂອງເຮົາ</span>
+      <h2 class="font-display text-3xl md:text-display text-on-surface">ຮ້ານຄ້າ</h2>
+    </div>
+    <!-- Filter Buttons -->
+    <div class="flex flex-wrap gap-2" id="filterBtns">
+      <button onclick="filterProducts('all')" class="filter-btn active font-label-caps text-[11px] px-4 py-2 rounded-full border border-outline-variant/50 hover:border-primary transition-all">ທັງໝົດ</button>
+      <button onclick="filterProducts('skincare')" class="filter-btn font-label-caps text-[11px] px-4 py-2 rounded-full border border-outline-variant/50 hover:border-primary transition-all">ດູແລຜິວ</button>
+      <button onclick="filterProducts('makeup')" class="filter-btn font-label-caps text-[11px] px-4 py-2 rounded-full border border-outline-variant/50 hover:border-primary transition-all">ເຄື່ອງສຳອາງ</button>
+      <button onclick="filterProducts('bath')" class="filter-btn font-label-caps text-[11px] px-4 py-2 rounded-full border border-outline-variant/50 hover:border-primary transition-all">ອາບນ້ຳ & ຮ່າງກາຍ</button>
+      <button onclick="filterProducts('wellness')" class="filter-btn font-label-caps text-[11px] px-4 py-2 rounded-full border border-outline-variant/50 hover:border-primary transition-all">ສຸຂະພາບ</button>
+    </div>
+  </div>
+
+  <!-- Products Grid -->
+  <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6" id="productsGrid">
+    <!-- Products injected by JS -->
+  </div>
+  <div id="noResults" class="hidden text-center py-16 text-on-surface-variant">
+    <span class="material-symbols-outlined text-5xl mb-4 block opacity-30">search_off</span>
+    <p class="font-body-lg">ບໍ່ພົບສິນຄ້າທີ່ຊອກຫາ</p>
+  </div>
+</section>
+
+<!-- Benefits Section -->
+<section class="bg-surface-container py-16">
+  <div class="max-w-[1200px] mx-auto px-6 md:px-10">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+      <div class="text-center p-6">
+        <div class="w-14 h-14 bg-primary-container/40 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="material-symbols-outlined text-primary text-2xl">local_shipping</span>
+        </div>
+        <h3 class="font-title-md text-[16px] text-on-surface mb-2">ສົ່ງຟຣີ</h3>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">ສຳລັບທຸກຄຳສັ່ງ $50 ຂຶ້ນໄປ</p>
+      </div>
+      <div class="text-center p-6">
+        <div class="w-14 h-14 bg-primary-container/40 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="material-symbols-outlined text-primary text-2xl">verified</span>
+        </div>
+        <h3 class="font-title-md text-[16px] text-on-surface mb-2">ຂອງແທ້ 100%</h3>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">ສິນຄ້າຄຸນນະພາບສູງ</p>
+      </div>
+      <div class="text-center p-6">
+        <div class="w-14 h-14 bg-primary-container/40 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="material-symbols-outlined text-primary text-2xl">autorenew</span>
+        </div>
+        <h3 class="font-title-md text-[16px] text-on-surface mb-2">ຄືນສິນຄ້າງ່າຍ</h3>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">ໃນ 30 ວັນ ໂດຍບໍ່ມີຄຳຖາມ</p>
+      </div>
+      <div class="text-center p-6">
+        <div class="w-14 h-14 bg-primary-container/40 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="material-symbols-outlined text-primary text-2xl">support_agent</span>
+        </div>
+        <h3 class="font-title-md text-[16px] text-on-surface mb-2">ຊ່ວຍເຫຼືອ 24/7</h3>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">ທີມງານພ້ອມຊ່ວຍທຸກເວລາ</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Newsletter Section -->
+<section class="max-w-[1200px] mx-auto px-6 md:px-10 py-20">
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 bg-surface-container rounded-3xl overflow-hidden shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-secondary-container/30">
+    <div class="lg:col-span-7 p-10 lg:p-16 flex flex-col justify-center space-y-6">
+      <div>
+        <span class="font-label-caps text-[11px] text-primary tracking-widest block uppercase mb-3">ວາລະສານ</span>
+        <h2 class="font-display text-3xl md:text-display text-on-background mb-4">ຄວາມງາມ ຈາກພາຍໃນ<br/>ສົ່ງຫາ Inbox ຂອງທ່ານ</h2>
+        <p class="font-body-lg text-body-lg text-on-surface-variant max-w-md">ເຂົ້າຮ່ວມຊຸມຊົນຂອງເຮົາ ເພື່ອໄດ້ຮັບເຄັດລັບດູແລຜິວ ການເປີດຕົວສິນຄ້າໃໝ່ ແລະ ຂ່າວສານກ່ຽວກັບເຫດການ</p>
+      </div>
+      <div class="flex flex-col sm:flex-row gap-3 max-w-md">
+        <input id="emailInput" class="flex-1 bg-white border border-secondary-container rounded-xl px-5 py-3.5 focus:outline-none focus:border-primary transition-colors text-on-surface font-body-sm" placeholder="ທີ່ຢູ່ອີເມລ..." type="email"/>
+        <button onclick="subscribeNewsletter()" class="bg-primary text-on-primary font-label-caps text-[12px] px-6 py-3.5 rounded-xl hover:opacity-90 transition-opacity whitespace-nowrap">ສະໝັກ</button>
+      </div>
+      <p class="font-body-sm text-body-sm text-on-surface-variant italic">ໂດຍການສະໝັກ ທ່ານຕົກລົງຕາມ ນະໂຍບາຍຄວາມເປັນສ່ວນຕົວ ແລະ ເງື່ອນໄຂການໃຊ້ງານ</p>
+    </div>
+    <div class="lg:col-span-5 h-[300px] lg:h-full relative">
+      <img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCwhEckhrRj1Q3jXBRpg6RfZ5lavt9PQ8Tpl7Nn2zl0qgtKdTp3JCsyWw2YGY8Icv5o6t6dEcmzvJv8XWRI1uAtCGuZpg-P7FzzdEw199kBjDhI60Ku7CkX_Yh-BM_1eMy75GdrtOo1DGB6-QaoxVXAlzeibcv23hGkt98IosS-NCbHuMZndXwZKB1AGtOA31Mzoq4IOHj5wnZ0Lzw62ROX--LtqAz7mXq-PumjEaZca7Sg-pHlYisTo3l5JGEMRHfjCZX4J0z-7Q"/>
+      <div class="absolute inset-0 bg-primary/10 mix-blend-multiply"></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- Footer -->
+<footer class="bg-surface-container-highest mt-4 w-full py-14">
+  <div class="max-w-[1200px] mx-auto px-6 md:px-10 grid grid-cols-1 md:grid-cols-4 gap-8">
+    <div>
+      <a class="font-display text-xl text-primary mb-5 block" href="#">LUXE BEAUTY</a>
+      <p class="font-body-sm text-body-sm text-on-surface-variant max-w-xs leading-relaxed">ຄັດສັນສິນຄ້າຄວາມງາມ ແລະ ສຸຂະພາບລະດັບສູງ ຕັ້ງແຕ່ ປີ 2012 ດ້ວຍວິທະຍາສາດຈາກທຳມະຊາດ</p>
+      <div class="flex gap-3 mt-6">
+        <a class="w-9 h-9 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:bg-primary hover:text-white transition-all">
+          <span class="material-symbols-outlined text-[16px]">public</span>
+        </a>
+        <a class="w-9 h-9 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:bg-primary hover:text-white transition-all">
+          <span class="material-symbols-outlined text-[16px]">favorite</span>
+        </a>
+        <a class="w-9 h-9 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:bg-primary hover:text-white transition-all">
+          <span class="material-symbols-outlined text-[16px]">movie</span>
+        </a>
+      </div>
+    </div>
+    <div>
+      <h4 class="font-label-caps text-[11px] text-primary mb-5 uppercase tracking-widest">ຄົ້ນພົບ</h4>
+      <ul class="space-y-3">
+        <li><a href="#shop" class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ການດູແລ</a></li>
+        <li><a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ວາລະສານ</a></li>
+        <li><a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ສາຂາ</a></li>
+        <li><a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ຂາຍສ່ງ</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4 class="font-label-caps text-[11px] text-primary mb-5 uppercase tracking-widest">ຊ່ວຍເຫຼືອ</h4>
+      <ul class="space-y-3">
+        <li><a href="luxe_orders.html" class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ຕິດຕາມຄຳສັ່ງ</a></li>
+        <li><a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ຂໍ້ມູນການສົ່ງ</a></li>
+        <li><a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ນະໂຍບາຍຄວາມເປັນສ່ວນຕົວ</a></li>
+        <li><a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors">ຕິດຕໍ່ພວກເຮົາ</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4 class="font-label-caps text-[11px] text-primary mb-5 uppercase tracking-widest">ທີ່ຕັ້ງ</h4>
+      <div class="space-y-3">
+        <div class="flex items-start gap-2">
+          <span class="material-symbols-outlined text-[18px] text-primary mt-0.5">location_on</span>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">ບ້ານ ສີສັດຕະນາກ, ນະຄອນຫຼວງ ວຽງຈັນ</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[18px] text-primary">phone</span>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">+856 20 123 4567</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[18px] text-primary">mail</span>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">hello@luxebeauty.la</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="max-w-[1200px] mx-auto px-6 md:px-10 mt-12 pt-8 border-t border-outline-variant/30 flex flex-col md:flex-row justify-between items-center gap-4">
+    <p class="font-body-sm text-body-sm text-on-surface-variant">© 2025 LUXE BEAUTY. ສະຫງວນລິຂະສິດ.</p>
+    <div class="flex items-center gap-4">
+      <span class="material-symbols-outlined text-[22px] text-outline">payments</span>
+      <span class="material-symbols-outlined text-[22px] text-outline">credit_card</span>
+      <span class="material-symbols-outlined text-[22px] text-outline">account_balance_wallet</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Products Data
+const products = [
+  { id:1, name:"ເຊລຸ່ມ ໂຣສ ໄຮເດຣຊັ່ນ", desc:"ລ້ຽງຜິວ ແລະ ໃຫ້ຄວາມຊຸ່ມຊື່ນ", price:85, category:"skincare", badge:"ຂາຍດີ", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuBK_xhfotC-hJHrvydSnpeXR52ybkl-yIwvWXCL-5bWpMftOKeJIxh-dq7HkYcAW1Ekg9Z0Qk4BgO6xD11a97_xrhGIG3_leiO52lnm0uCAaKHsgFnxzzG_fNpcimdJs2O6M38VktV07_VJW7y0Ettsc4Ow7fB11CJMRM1KsNz7EnCLq2F_NbVa3RluCPB5-jSwNP7EccawkYFc0lZ4t_togqhFEa9Q9IF10C6P02DKLqQSKLGiCfYGc3ggla7_SvYmy0-OuSCqUA", stars:5, reviews:128 },
+  { id:2, name:"ນ້ຳຫອມ ຊິນ ຣາດີ ອ໋ອຍ", desc:"ນ້ຳຫອມ ຄວາມສ່ອງໄສ ສຳລັບຜິວ", price:120, category:"skincare", badge:"ໃໝ່", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuCQ23uqezSJ4BJj_3P5MPpXNnmjS2q6MllJdlzQDQsuDbRejeIEd7iQlaj8DByTwI-wAOV3H9gYAJcMy4HyshSBhB9BmbH2VUfSv96epfZtngj75oV0ORz2lI7cU82xi1FA9eOc0z1u4eQGQnWg1f6ziTj3EPEMIgA6xDLescWpjxn3xXP_ahg51qxhDha7OLjLQ-ElGlLaDuWcyVsGZ-6o9HaqqBozMCiBSQFPaZAzsDs0RFDy2WZgPYQjJ2a39QrU0tQp5B7d4Q", stars:4, reviews:85 },
+  { id:3, name:"ຕິດສີ ລິ້ນ ວຽວເວລ", desc:"ສີ ລິ້ນ ຄຸນນະພາບສູງ", price:35, category:"makeup", badge:"", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuBjbJ2lBPTiOIinxDJIKPf2Ihk3kDkpcqChvkLrIfg_2SeEnTZc1L2awKJq2RNQned355UmLkAUYWcXI0xfwdKOQwELfV2poyLmzf239WkF9NuIPaVF8AewKt1LUunm8Pg5d4r-BfYfYxjYuCU78X1Qko0OKetwJERFwc3JabZvp2-eUIPswd8i57QxDEYvVxwiZNEzQhTklJSWor2bbd7AoqqWQ2qdxMy-JTpm0ihIvxz_VIJcFSUSYuYECsWaQhoXQB2WuFTPXQ", stars:5, reviews:203 },
+  { id:4, name:"ແຜ່ນຂັດໜ້າ ໂບທາ ດ໋ວ ມິສ", desc:"ສ້ຳຊຸ່ມ ແລະ ສົດຊື່ນ ທັນທີ", price:42, category:"skincare", badge:"ຂາຍດີ", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuCDwlWohr79S8_c80NzaqkGepsS5-mNShRlZQeTl1zirnZgvdEvrGb3ctMtkkwyfttF_uUk4a98m6Z8rEyDyfiKgPr-A8D5SX4gp-BMDk2j3VH3L3qq0CpOBY8ojpJGIIAmd4ceKSz6V6Pmdeslvf8WV7rlmcy8V0zQhf3gLzUhz7FqbkFBBXWhmL511BjGYnb0bxcWFuEtE4Lki7HxMT-bcffkBq9HDHQVy9jL_9mC_f37jhvg0AamQsbKUGDo18skofmanEFUqA", stars:4, reviews:67 },
+  { id:5, name:"ຜ້າລ້າງໜ້າ ໂຕຣ ໂຄ ລ໋ອດ", desc:"ລ້ານ ລ້ຽງ ຜິວໜ້າ", price:58, category:"bath", badge:"", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuB_ujU_c3cvn7B9_GxY4NTv-AZP3LWDieEUlYSBsYDuwZ5k9Kjb_q-GC2uMddRcw9uOhq0vCEzu-6rv_oKgt7Ah73MZWdbfMg1nQo_y8hWdQ_i0azirY9Fs9GXmzisRq__aT7wG5m26q4fPGBZvg4onYjBMdex1_ytQBGRD7uUkrwgypr33lq1ZmGQNR-Z6zxwrvFoBAQhojfZnYYRR_4fOgIVmth0HnUeZOTPiMs8qbP-g2KiXs147s_423SugadAVGyJ2OZV9Tg", stars:4, reviews:44 },
+  { id:6, name:"ໝ້ຳຄ຺ ຜ຺ ລ຺ ໄຊ ຄ໋ອຍ ດ຺ ທ຺", desc:"ຂັດ ຂຸມຂຸນ ແລະ ເຮັດໃຫ້ ໜ້ານ້ອຍ", price:68, category:"skincare", badge:"", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuAsRIsHiMWGjJXeg2l54xBxcQOMfawpF3xgg2pOn-IcT3DNEiz3bBwkqwUBG3hK1GJurGpC13TCrXB95ZzlaIE2LgN-ujr6IrpX6-epuG9kLpFlRl_ODW5VDh7uIgw31mRM092411h5PHv9I5WF6RQh0sJ5SCIrLc-uhI7XC5S0D4_zcDh4d1eeLN9nFckmMJn_mu4mLHhGPYnpXwOJyYPj1mfSBY7_opDEBoXC5EAxklu8FZRrtQx607CWqI78bjXKB_J4SgbBnA", stars:5, reviews:91 },
+  { id:7, name:"ເທຍນ ໂບທານິ ໂຣສ & ຊີດາ", desc:"ນ້ຳຫອມ ທຳມະຊາດ ສຳລັບ ສຸຂະພາບ", price:45, category:"wellness", badge:"", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuDClCuqNAkIQ8y1isEI5W7H8QZdA1YacKg2e68AJfv-ZikTr0gMzRXccD1EejEK6zSaIO8MBCuv03G6bRiDz4-pfulvRJ4ZWEHyMSy4Zj02EWLZngcY6m6auB4TevqB2ufaggo4Z0rInWWbB4rFFFJDiQ2CmxjGe5cVTTlAwhfbKc5O_W8mlz0BEm3fqcJUqmxwS9FaFFARuCzqAbWmAo-8m8Vu2d1_eJmF6iG5LHfRbRt0RZ6R8VSNfNF-hy1SyxaK17YtC2OIVQ", stars:4, reviews:156 },
+  { id:8, name:"ແປງ ເຄື່ອງ ສຳອາງ ລ຺ ຊ຺ ໂກ", desc:"ຊຸດ ແປງ ດູ ແລ ຜິວໜ້ານ ຄ຺ ນ຺ ນ຺", price:120, category:"makeup", badge:"ໃໝ່", img:"https://lh3.googleusercontent.com/aida-public/AB6AXuBKqOywIz70dd7YF2NpD3gXyADuz8JpWURey_UMdb9ocy9vMJQrEVVbOT9DEBwTIU18sxp3De-aHgCyEp--U7G62a_2KHiVKPCm65GO0h3ttCojSzYQqDqxRapNHjeZKCfgW8dCrZvkFe4AhPWZqAzIo2NAwZWvedSg90Xbuph-MVE9XF3eBxjjtCrSKkWrKpyv0QYDQcI862HavRnidDUVNpapsHehOhoA6AOniEYayLK8TkvCjhl2Fk56rpDK8ZX1Dd4Hu-2cNQ", stars:5, reviews:38 }
+];
+
+let cart = [];
+let filteredProducts = [...products];
+
+
+function stockBtn(p) {
+  if (!p.stock || p.stock === 0) {
+    return '<div class="absolute inset-0 bg-white/60 rounded-xl flex items-center justify-center"><span style="background:#ba1a1a;color:#fff;padding:6px 16px;border-radius:99px;font-size:12px;font-weight:700;">ໝົດແລ້ວ</span></div>';
+  }
+  var hint = (p.stock < 10) ? ' (ເຫຼືອ ' + p.stock + ')' : '';
+  return '<button onclick="addToCart(' + p.id + ')" class="absolute bottom-3 left-3 right-3 bg-primary text-on-primary font-label-caps text-[11px] py-2.5 rounded-lg opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-300 hover:shadow-lg">ໃສ່ກະຕ່າ' + hint + '</button>';
+}
+
+function renderProducts(list) {
+  const grid = document.getElementById('productsGrid');
+  const noRes = document.getElementById('noResults');
+  if (list.length === 0) { grid.innerHTML = ''; noRes.classList.remove('hidden'); return; }
+  noRes.classList.add('hidden');
+  grid.innerHTML = list.map(p => `
+    <div class="product-card group cursor-pointer" data-id="${p.id}">
+      <div class="relative aspect-[3/4] overflow-hidden rounded-xl bg-surface-container mb-4 shadow-sm border border-secondary-container/30">
+        <img class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" src="${p.img}" alt="${p.name}"/>
+        ${p.badge ? `<div class="absolute top-3 left-3"><span class="bg-primary text-on-primary font-label-caps text-[10px] px-2.5 py-1 rounded-full">${p.badge}</span></div>` : ''}
+                ${stockBtn(p)}
+        <button class="absolute top-3 right-3 w-8 h-8 bg-white/80 backdrop-blur rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-white">
+          <span class="material-symbols-outlined text-[16px] text-on-surface-variant">favorite</span>
+        </button>
+      </div>
+      <div class="space-y-1 px-1">
+        <h3 class="font-title-md text-[15px] text-on-surface">${p.name}</h3>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">${p.desc}</p>
+        <div class="flex items-center gap-1.5 pt-1">
+          ${Array.from({length:5}, (_,i) => `<span class="rating-star text-[14px]">${i < p.stars ? '★' : '☆'}</span>`).join('')}
+          <span class="font-body-sm text-[12px] text-outline">(${p.reviews})</span>
+        </div>
+        <p class="font-title-md text-[17px] text-primary pt-1">$${p.price}.00</p>
+      </div>
+    </div>
+  `).join('');
+}
+
+function filterProducts(cat) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  event && event.target && event.target.classList.add('active');
+  // Also mark the clicked one
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    const label = b.textContent.trim();
+    if (cat === 'all' && label === 'ທັງໝົດ') b.classList.add('active');
+    if (cat === 'skincare' && label === 'ດູແລຜິວ') b.classList.add('active');
+    if (cat === 'makeup' && label === 'ເຄື່ອງສຳອາງ') b.classList.add('active');
+    if (cat === 'bath' && label === 'ອາບນ້ຳ & ຮ່າງກາຍ') b.classList.add('active');
+    if (cat === 'wellness' && label === 'ສຸຂະພາບ') b.classList.add('active');
+  });
+  filteredProducts = cat === 'all' ? [...products] : products.filter(p => p.category === cat);
+  renderProducts(filteredProducts);
+}
+
+function searchProducts() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const res = products.filter(p => p.name.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q));
+  renderProducts(res);
+}
+
+function addToCart(id) {
+  const product = products.find(p => p.id === id);
+  const existing = cart.find(c => c.id === id);
+  if (existing) { existing.qty++; } else { cart.push({...product, qty:1}); }
+  updateCartUI();
+  showToast(`ເພີ່ມ "${product.name}" ໃສ່ກະຕ່າແລ້ວ!`);
+}
+
+function updateCartUI() {
+  const count = cart.reduce((s, c) => s + c.qty, 0);
+  const countEl = document.getElementById('cartCount');
+  if (count > 0) { countEl.style.removeProperty('display'); countEl.textContent = count; }
+  else { countEl.style.setProperty('display','none','important'); }
+
+  const itemsEl = document.getElementById('cartItems');
+  const emptyEl = document.getElementById('emptyCart');
+  const footerEl = document.getElementById('cartFooter');
+  const totalEl = document.getElementById('cartTotal');
+
+  if (cart.length === 0) {
+    itemsEl.innerHTML = '<div class="text-center py-16 text-on-surface-variant"><span class="material-symbols-outlined text-5xl mb-4 block opacity-30">shopping_bag</span><p class="font-body-sm text-body-sm">ກະຕ່າຂອງທ່ານຍັງວ່າງຢູ່</p></div>';
+    footerEl.style.display = 'none';
+  } else {
+    itemsEl.innerHTML = cart.map(c => `
+      <div class="flex items-center gap-4 mb-5 pb-5 border-b border-outline-variant/20">
+        <img class="w-16 h-16 rounded-lg object-cover" src="${c.img}" alt="${c.name}"/>
+        <div class="flex-1">
+          <p class="font-label-caps text-[13px] text-on-surface mb-1">${c.name}</p>
+          <p class="font-body-sm text-body-sm text-primary">$${c.price}.00</p>
+          <div class="flex items-center gap-3 mt-2">
+            <button onclick="updateQty(${c.id}, -1)" class="w-7 h-7 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:bg-surface-container transition-colors font-bold">−</button>
+            <span class="font-label-caps text-[13px]">${c.qty}</span>
+            <button onclick="updateQty(${c.id}, 1)" class="w-7 h-7 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:bg-surface-container transition-colors font-bold">+</button>
+          </div>
+        </div>
+        <button onclick="removeFromCart(${c.id})" class="p-1.5 hover:bg-error-container/20 rounded-lg transition-colors">
+          <span class="material-symbols-outlined text-[18px] text-outline hover:text-error">delete</span>
+        </button>
+      </div>
+    `).join('');
+    const total = cart.reduce((s, c) => s + c.price * c.qty, 0);
+    totalEl.textContent = `$${total.toFixed(2)}`;
+    footerEl.style.display = 'block';
+  }
+}
+
+function updateQty(id, delta) {
+  const item = cart.find(c => c.id === id);
+  if (!item) return;
+  item.qty += delta;
+  if (item.qty <= 0) { cart = cart.filter(c => c.id !== id); }
+  updateCartUI();
+}
+
+function removeFromCart(id) { cart = cart.filter(c => c.id !== id); updateCartUI(); }
+
+function openCart() {
+  document.getElementById('cartDrawer').classList.add('open');
+  document.getElementById('cartOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeCart() {
+  document.getElementById('cartDrawer').classList.remove('open');
+  document.getElementById('cartOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function openMobileMenu() { document.getElementById('mobileMenu').classList.add('open'); document.body.style.overflow = 'hidden'; }
+function closeMobileMenu() { document.getElementById('mobileMenu').classList.remove('open'); document.body.style.overflow = ''; }
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = '✓ ' + msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+function subscribeNewsletter() {
+  const email = document.getElementById('emailInput').value;
+  if (!email || !email.includes('@')) { showToast('ກະລຸນາໃສ່ອີເມລທີ່ຖືກຕ້ອງ!'); return; }
+  showToast('ສະໝັກສຳເລັດ! ຂໍຂອບໃຈ 💕');
+  document.getElementById('emailInput').value = '';
+}
+
+// Init
+renderProducts(products);
+
+// Modal helpers
+function openModal(id) {
+  const el = document.getElementById(id);
+  el.style.opacity = '1'; el.style.pointerEvents = 'all';
+  el.querySelector('.modal-box').style.transform = 'translateY(0)';
+  document.body.style.overflow = 'hidden';
+}
+function closeModalById(id) {
+  const el = document.getElementById(id);
+  el.style.opacity = '0'; el.style.pointerEvents = 'none';
+  el.querySelector('.modal-box').style.transform = 'translateY(20px)';
+  document.body.style.overflow = '';
+}
+function openCareModal() { openModal('careModal'); }
+function closeCareModal() { closeModalById('careModal'); }
+function openBranchModal() { openModal('branchModal'); }
+function closeBranchModal() { closeModalById('branchModal'); }
+function openJournalModal() { openModal('journalModal'); }
+function closeJournalModal() { closeModalById('journalModal'); }
+// Close modals on backdrop click
+['careModal','branchModal','journalModal'].forEach(id => {
+  document.getElementById(id).addEventListener('click', function(e) {
+    if (e.target === this) closeModalById(id);
+  });
+});
+</script>
+
+<!-- Checkout Modal -->
+<div id="checkoutModal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:400;display:none;align-items:center;justify-content:center;">
+  <div style="background:#fff8f7;border-radius:24px;padding:32px;max-width:460px;width:92%;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+      <h3 style="font-size:20px;font-weight:700;color:#1f1a1b;margin:0;">ຊຳລະເງິນ</h3>
+      <button onclick="closeCheckoutModal()" style="background:none;border:none;cursor:pointer;padding:4px;">
+        <span class="material-symbols-outlined" style="color:#514343;">close</span>
+      </button>
+    </div>
+    <!-- Order summary -->
+    <div id="checkoutSummary" style="background:#f6ebeb;border-radius:14px;padding:16px;margin-bottom:20px;font-size:13px;"></div>
+    <!-- Form -->
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#675c58;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px;">ຊື່ຜູ້ຮັບ</label>
+        <input id="coName" placeholder="ຊື່ ແລະ ນາມສະກຸນ..." style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #d6c2c1;border-radius:10px;font-size:14px;outline:none;background:#fff;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#675c58;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px;">ທີ່ຢູ່ຈັດສົ່ງ</label>
+        <input id="coAddress" placeholder="ບ້ານ, ເມືອງ, ແຂວງ..." style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #d6c2c1;border-radius:10px;font-size:14px;outline:none;background:#fff;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#675c58;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px;">ວິທີຊຳລະ</label>
+        <select id="coPayMethod" style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #d6c2c1;border-radius:10px;font-size:14px;outline:none;background:#fff;">
+          <option value="ເງິນສົດ">💵 ເງິນສົດ</option>
+          <option value="ບັດເຄດິດ">💳 ບັດເຄດິດ / ເດບິດ</option>
+          <option value="ໂອນເງິນ">🏦 ໂອນເງິນ</option>
+          <option value="QR Code">📱 QR Code</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#675c58;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px;">ໝາຍເຫດ (ບໍ່ບັງຄັບ)</label>
+        <input id="coNote" placeholder="ຂໍ້ຄວາມຫາຜູ້ສົ່ງ..." style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #d6c2c1;border-radius:10px;font-size:14px;outline:none;background:#fff;"/>
+      </div>
+      <button onclick="submitOrder()" id="submitOrderBtn" style="width:100%;padding:14px;background:linear-gradient(135deg,#845051,#a06060);color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;margin-top:6px;">
+        ✅ ຢືນຢັນຄຳສັ່ງ
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- DB Status bar -->
+<div id="dbBar" style="position:fixed;bottom:0;left:0;right:0;background:#342f2f;color:#fff;font-size:11px;padding:4px 16px;display:flex;align-items:center;gap:8px;z-index:9990;opacity:0;transition:opacity .3s;">
+  <span style="width:7px;height:7px;border-radius:50%;background:#4caf50;display:inline-block;flex-shrink:0;"></span>
+  <span id="dbBarText">LuxeBeautyDB ເຊື່ອມຕໍ່ສຳເລັດ</span>
+</div>
+
+<script>
+// ── DB init + session nav ─────────────────────────────────
+(async () => {
+  try {
+    await LuxeDB.init();
+    const bar = document.getElementById('dbBar');
+    bar.style.opacity = '1';
+    setTimeout(() => bar.style.opacity = '0', 2500);
+
+    // Session — show user nav pill
+    const user = LuxeDB.session.currentUser();
+    renderSessionNav(user);
+    // Load products from DB (real stock values & new products)
+    const dbProds = await LuxeDB.products.getAll();
+    if (dbProds.length > 0) {
+      // ລ້າງຂໍ້ມູນທີ່ Hardcode ໄວ້ຕອນທຳອິດອອກທັງໝົດ
+      products.length = 0; 
+      // ເອົາຂໍ້ມູນຈາກຖານຂໍ້ມູນ (Database) ມາໃສ່ແທນທີ່ 100%
+      dbProds.forEach(dp => products.push(dp)); 
+      
+      filteredProducts = [...products];
+      renderProducts(filteredProducts);
+    }
+  } catch(e) {
+    console.warn('DB init error', e);
+  }
+})();
+
+/* ── Session nav ─────────────────────────────────────────── */
+function renderSessionNav(user) {
+  const navEl = document.getElementById('sessionNav');
+  if (!navEl) return;
+  if (user) {
+    navEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;">
+        ${user.role==='admin' ? `<a href="luxe_admin.html" style="display:flex;align-items:center;gap:6px;background:#845051;color:#fff;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;text-decoration:none;">
+          <span class="material-symbols-outlined" style="font-size:15px!important;">admin_panel_settings</span>Admin
+        </a>` : ''}
+        <div style="display:flex;align-items:center;gap:8px;background:#ffdad9;border-radius:20px;padding:6px 14px;font-size:13px;font-weight:600;color:#845051;cursor:pointer;" onclick="handleLogoutHome()">
+          <span style="width:22px;height:22px;border-radius:50%;background:#845051;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0;">${(user.avatar||user.name[0]).toUpperCase()}</span>
+          ${user.name.split(' ')[0]}
+          <span class="material-symbols-outlined" style="font-size:14px!important;opacity:.7;">logout</span>
+        </div>
+      </div>`;
+  } else {
+    navEl.innerHTML = `<a href="luxe_login.html" style="display:flex;align-items:center;gap:6px;border:1.5px solid #d6c2c1;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;color:#845051;text-decoration:none;background:#fff;">
+      <span class="material-symbols-outlined" style="font-size:15px!important;">account_circle</span>ເຂົ້າສູ່ລະບົບ
+    </a>`;
+  }
+}
+
+async function handleLogoutHome() {
+  await LuxeDB.session.logout();
+  window.location.reload();
+}
+
+// ── Checkout modal ────────────────────────────────────────
+function openCheckoutModal() {
+  if (cart.length === 0) { showToast('ກະຕ່າວ່າງ!'); return; }
+  closeCart();
+
+  // Render summary
+  const total = cart.reduce((s,c) => s + c.price * c.qty, 0);
+  document.getElementById('checkoutSummary').innerHTML = `
+    <div style="font-weight:700;color:#1f1a1b;margin-bottom:10px;">🧾 ສະຫຼຸບຄຳສັ່ງ</div>
+    ${cart.map(i => `
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #ebddd7;">
+        <span style="color:#514343;">${i.name} × ${i.qty}</span>
+        <span style="font-weight:600;color:#845051;">$${(i.price*i.qty).toFixed(2)}</span>
+      </div>`).join('')}
+    <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:15px;font-weight:700;">
+      <span>ລວມ</span><span style="color:#845051;">$${total.toFixed(2)}</span>
+    </div>`;
+
+  document.getElementById('checkoutModal').style.display = 'flex';
+}
+
+function closeCheckoutModal() {
+  document.getElementById('checkoutModal').style.display = 'none';
+}
+
+async function submitOrder() {
+  const name    = document.getElementById('coName').value.trim();
+  const address = document.getElementById('coAddress').value.trim();
+  const pay     = document.getElementById('coPayMethod').value;
+  const note    = document.getElementById('coNote').value.trim();
+
+  if (!name)    { showToast('ກະລຸນາໃສ່ຊື່ຜູ້ຮັບ'); return; }
+  if (!address) { showToast('ກະລຸນາໃສ່ທີ່ຢູ່'); return; }
+
+  const btn = document.getElementById('submitOrderBtn');
+  btn.disabled = true; btn.textContent = '⏳ ກຳລັງດຳເນີນ...';
+
+  try {
+    await LuxeDB.orders.place({
+      customerName: name,
+      address,
+      payMethod: pay,
+      note,
+      cartItems: cart.map(i => ({ id:i.id, name:i.name, img:i.img, price:i.price, qty:i.qty }))
+    });
+
+    // Clear cart
+    cart = [];
+    updateCartUI();
+    closeCheckoutModal();
+    showToast('✅ ສັ່ງຊື້ສຳເລັດ! ກວດເບິ່ງທີ່ ໜ້າຄຳສັ່ງ');
+
+    // Refresh product stock display
+    const dbProds = await LuxeDB.products.getAll();
+    dbProds.forEach(dp => { const idx = products.findIndex(p=>p.id===dp.id); if(idx!==-1) products[idx]={...products[idx],...dp}; });
+    renderProducts(filteredProducts = [...products]);
+
+    setTimeout(() => { window.location.href = 'luxe_orders.html'; }, 1800);
+  } catch(e) {
+    showToast('❌ ' + e.message);
+    btn.disabled = false; btn.textContent = '✅ ຢືນຢັນຄຳສັ່ງ';
+  }
+}
+</script>
+
+</body>
+</html>
